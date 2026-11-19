@@ -186,6 +186,38 @@ export function createViewer(options: {
     current = page
     relayout({ page, fraction: 0 })
     drawVisible()
+    // Design 5.3: the start page and the one after it, even when a short screen shows one.
+    if (doc && page + 1 < doc.pageCount) {
+      drawPage(page + 1)
+    }
+  }
+
+  function isOnScreen(page: number): boolean {
+    const y = layout.tops[page] + GAP
+    const top = container.scrollTop
+    return y + layout.heights[page] > top && y < top + container.clientHeight
+  }
+
+  /**
+   * After a zoom or resize: a pinned page must still be on screen. If the new layout and the
+   * scroll cap moved it off, the pin goes and the page actually on screen becomes current.
+   * Returns true when `current` changed.
+   */
+  function reconcilePin(): boolean {
+    if (!pin) {
+      return false
+    }
+    if (isOnScreen(pin.page)) {
+      pin.top = container.scrollTop
+      return false
+    }
+    pin = null
+    const page = pageAtScroll()
+    if (page === current) {
+      return false
+    }
+    current = page
+    return true
   }
 
   /** Draws, in this task, every page the screen shows at the actual (capped) scroll top. */
@@ -200,6 +232,12 @@ export function createViewer(options: {
   function currentAnchor(): { page: number; fraction: number } {
     if (!layout.tops.length) {
       return { page: 0, fraction: 0 }
+    }
+    if (pin) {
+      // A pinned page is meant to sit at the top. Near the end the scroll cap keeps it lower,
+      // and the fraction measured there is negative and grows with the zoom, which would push
+      // the page off screen; anchor its top and let the cap apply again.
+      return { page: pin.page, fraction: 0 }
     }
     const h = layout.heights[current] || 1
     return { page: current, fraction: (container.scrollTop - layout.tops[current]) / h }
@@ -301,6 +339,9 @@ export function createViewer(options: {
         if (doc && w !== lastWidth) {
           lastWidth = w
           relayout(currentAnchor())
+          if (reconcilePin()) {
+            onViewChange({ page: current, zoom })
+          }
           paintStatus()
         }
         schedule()
@@ -354,6 +395,8 @@ export function createViewer(options: {
     const anchor = currentAnchor()
     zoom = z
     relayout(anchor)
+    reconcilePin()
+    drawVisible()
     paintStatus()
     onViewChange({ page: current, zoom })
     schedule()

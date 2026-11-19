@@ -268,6 +268,26 @@ test('글자가 있는 한 쪽 문서는 그대로 보인다', async () => {
   c.dispose()
 })
 
+test('쪽 크기 테두리 사각형 하나만 있는 문서는 그대로 보인다 (재리뷰 재현)', async () => {
+  // Engine output for a page-sized rectangle with white fill and a black solid line: the paper
+  // first, then a second page-sized rect that carries the stroke.
+  const doc = onePage(
+    '<rect x="0" y="0" width="793.7" height="1122.5" fill="#ffffff" stroke="#000000" stroke-width="5.333333333333333"/>',
+    []
+  )
+  assert.equal(isBlankPage(doc, 0), false)
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(view.last()?.kind, 'show')
+  c.dispose()
+})
+
+test('맨 앞 무테 흰 종이 말고는 쪽 크기 흰 사각형도 내용이다', () => {
+  assert.equal(isBlankPage(onePage(PAPER, []), 0), false)
+  assert.equal(isBlankPage(onePage('<g transform="translate(1 1)"><rect x="0" y="0" width="793.7" height="1122.5" fill="#ffffff"/></g>', []), 0), false)
+})
+
 test('색 있는 쪽 크기 배경은 빈 쪽이 아니다', () => {
   const doc = onePage('<rect x="0" y="0" width="793.7" height="1122.5" fill="#203040"/>', [])
   assert.equal(isBlankPage(doc, 0), false)

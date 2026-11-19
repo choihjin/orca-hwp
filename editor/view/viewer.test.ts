@@ -204,3 +204,81 @@ test('사용자가 스크롤하면 고정한 쪽을 놓고 화면 위치로 현�
     restore()
   }
 })
+
+/** Pages whose box overlaps the screen at the current scroll top, from the slot styles. */
+function visiblePages(container: FakeScroller): number[] {
+  const pages = container.children[0]?.children ?? []
+  const top = container.scrollTop
+  const out: number[] = []
+  pages.forEach((slot, i) => {
+    const y = parseFloat(slot.style.top)
+    const h = parseFloat(slot.style.height)
+    if (y + h > top && y < top + container.clientHeight) out.push(i)
+  })
+  return out
+}
+
+test('End으로 고정한 뒤 확대해도 상태 쪽이 화면에 보인다 (재리뷰 재현)', async () => {
+  const restore = installDom()
+  try {
+    const container = new FakeScroller(1000, 1400)
+    const status = fakeStatus()
+    const remembered: ViewState[] = []
+    const viewer = createViewer({
+      container: container as unknown as HTMLElement,
+      status,
+      onViewChange: (v) => remembered.push(v)
+    })
+    viewer.showDocument(bogeonso(), 0, 0.5)
+    await settle()
+    viewer.handleKey(key('End'))
+    await settle()
+    for (let n = 0; n < 5; n++) {
+      viewer.handleKey(key('+'))
+      await settle()
+    }
+    const visible = visiblePages(container)
+    assert.ok(
+      visible.includes(status.state.page),
+      `status page ${status.state.page} is on screen ${JSON.stringify(visible)}`
+    )
+    assert.ok(visible.includes(3), `the chosen last page stays on screen ${JSON.stringify(visible)}`)
+    assert.equal(status.state.page, 3)
+    assert.equal(remembered[remembered.length - 1].page, 3)
+    assert.equal(remembered[remembered.length - 1].zoom, 1.1)
+  } finally {
+    restore()
+  }
+})
+
+test('확대로 고정한 쪽이 화면에서 벗어나면 고정을 풀고 보이는 쪽으로 상태를 바꾼다', async () => {
+  const restore = installDom()
+  try {
+    const container = new FakeScroller(1000, 1400)
+    const status = fakeStatus()
+    const viewer = createViewer({ container: container as unknown as HTMLElement, status, onViewChange() {} })
+    // Page 2 chosen at zoom 1, then zoomed far out: everything fits, so nothing is capped and
+    // page 2 stays visible; the status must always name a page that is on screen.
+    viewer.showDocument(bogeonso(), 1, 1)
+    await settle()
+    for (let n = 0; n < 6; n++) {
+      viewer.handleKey(key('-'))
+      await settle()
+    }
+    assert.ok(visiblePages(container).includes(status.state.page))
+  } finally {
+    restore()
+  }
+})
+
+test('짧은 화면에서도 첫 칠에 시작 쪽과 다음 쪽을 그린다 (재리뷰 재현)', () => {
+  const restore = installDom()
+  try {
+    const container = new FakeScroller(1000, 800)
+    const viewer = createViewer({ container: container as unknown as HTMLElement, status: fakeStatus(), onViewChange() {} })
+    viewer.showDocument(bogeonso(), 0, 1)
+    assert.deepEqual(svgCounts(container), [1, 1, 0, 0])
+  } finally {
+    restore()
+  }
+})

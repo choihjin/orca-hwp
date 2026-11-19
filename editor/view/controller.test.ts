@@ -72,7 +72,7 @@ function engineOf(...docs: FakeDoc[]) {
 
 test('기억한 쪽에서 연다', async () => {
   const storage = memoryStorage()
-  saveView(storage, await documentKey(bytesA), { page: 3, zoom: 1.5 })
+  saveView(storage, documentKey(bytesA), { page: 3, zoom: 1.5 })
   const doc = fakeDoc('a', 10)
   const view = fakeView()
   const c = createController({ engine: engineOf(doc), view, storage })
@@ -85,12 +85,26 @@ test('기억한 쪽에서 연다', async () => {
   c.dispose()
 })
 
-test('첫 쪽은 기억을 찾기 전에 동기로 보낸다', () => {
+test('첫 showDocument 호출부터 기억한 쪽', () => {
+  const storage = memoryStorage()
+  saveView(storage, documentKey(bytesA), { page: 5, zoom: 1.25 })
+  const doc = fakeDoc('a', 10)
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage })
+  void c.load(bytesA)
+  // Nothing awaited: the first and only draw is already the remembered page (design 5.3).
+  const shows = view.calls.filter((call) => call.kind === 'show')
+  assert.equal(shows.length, 1)
+  assert.equal(shows[0].kind === 'show' && shows[0].page, 5)
+  assert.equal(shows[0].kind === 'show' && shows[0].zoom, 1.25)
+  c.dispose()
+})
+
+test('기억이 없으면 첫 칠에 0쪽을 동기로 보낸다', () => {
   const doc = fakeDoc('a', 10)
   const view = fakeView()
   const c = createController({ engine: engineOf(doc), view, storage: memoryStorage() })
   void c.load(bytesA)
-  // Nothing awaited yet: the view must already have the document (capture timing, design 5.3).
   assert.ok(view.calls.some((call) => call.kind === 'show' && call.doc === doc && call.page === 0))
   c.dispose()
 })
@@ -110,9 +124,9 @@ test('문서가 바뀌면 이전 문서를 dispose하고 다시 연다', async (
   assert.equal(b.disposed, 1)
 })
 
-test('앞 문서의 늦은 기억이 새 문서를 덮지 않는다', async () => {
+test('문서를 연달아 열면 마지막 문서만 남는다', async () => {
   const storage = memoryStorage()
-  saveView(storage, await documentKey(bytesA), { page: 2, zoom: 1 })
+  saveView(storage, documentKey(bytesA), { page: 2, zoom: 1 })
   const a = fakeDoc('a', 4)
   const b = fakeDoc('b', 5)
   const view = fakeView()
@@ -120,9 +134,10 @@ test('앞 문서의 늦은 기억이 새 문서를 덮지 않는다', async () =
   const first = c.load(bytesA)
   const second = c.load(bytesB)
   await Promise.all([first, second])
-  assert.ok(!view.calls.some((call) => call.kind === 'show' && call.doc === a && call.page === 2))
+  assert.equal(a.disposed, 1)
   const last = view.last()
   assert.equal(last?.kind === 'show' && last.doc, b)
+  assert.equal(last?.kind === 'show' && last.page, 0)
   c.dispose()
 })
 
@@ -166,7 +181,7 @@ test('EngineError가 아닌 예외는 engine 오류', async () => {
 
 test('기억한 쪽이 범위 밖이면 0쪽', async () => {
   const storage = memoryStorage()
-  saveView(storage, await documentKey(bytesA), { page: 99, zoom: 1 })
+  saveView(storage, documentKey(bytesA), { page: 99, zoom: 1 })
   const doc = fakeDoc('a', 4)
   const view = fakeView()
   const c = createController({ engine: engineOf(doc), view, storage })
@@ -185,7 +200,7 @@ test('보던 쪽을 잠시 뒤 기억한다', async () => {
   c.remember({ page: 6, zoom: 1.25 })
   c.remember({ page: 7, zoom: 1.25 })
   await new Promise((resolve) => setTimeout(resolve, 30))
-  assert.deepEqual(loadView(storage, await documentKey(bytesA)), { page: 7, zoom: 1.25 })
+  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 7, zoom: 1.25 })
   c.dispose()
 })
 
@@ -196,6 +211,6 @@ test('dispose는 남은 기억을 바로 저장하고 화면을 비운다', asyn
   await c.load(bytesA)
   c.remember({ page: 4, zoom: 1 })
   c.dispose()
-  assert.deepEqual(loadView(storage, await documentKey(bytesA)), { page: 4, zoom: 1 })
+  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 4, zoom: 1 })
   assert.equal(view.last()?.kind, 'clear')
 })

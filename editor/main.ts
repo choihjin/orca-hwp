@@ -13,11 +13,16 @@ import { createController } from './view/controller'
 import { createStatusBar } from './view/status-bar'
 import { createViewer } from './view/viewer'
 
+// Noto Serif/Sans KR per design 5.3. Nanum Myeongjo too: rhwp's serif fallback lists put it
+// ahead of AppleMyungjo and Noto Serif KR, so on a Mac without Batang it is what body text uses;
+// loaded here, it is ready before the first paint instead of arriving after it.
 const CORE_FONTS = [
   '400 16px "Noto Serif KR"',
   '700 16px "Noto Serif KR"',
   '400 16px "Noto Sans KR"',
-  '700 16px "Noto Sans KR"'
+  '700 16px "Noto Sans KR"',
+  '400 16px "Nanum Myeongjo"',
+  '700 16px "Nanum Myeongjo"'
 ]
 
 function element(id: string): HTMLElement {
@@ -98,7 +103,7 @@ if (!editor) {
         }
         const bytes = new Uint8Array(doc.content.bytes)
         status.update({ format: formatLabel(bytes, doc.fileType) })
-        // Synchronous up to the first pages; the remembered page follows after an async hash.
+        // Synchronous up to the first draw, remembered page included (design 5.3).
         controller.load(bytes).catch((error: unknown) => viewer.showError('engine', String(error)))
       })
     },

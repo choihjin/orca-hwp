@@ -1,0 +1,111 @@
+[
+  {
+    "file": "NotoSerifKR-Regular.woff2",
+    "families": [
+      "Noto Serif KR"
+    ],
+    "weight": 400,
+    "sha256": "c9a1e3ac69994d680883b53b1fd83d520733b704792522a932bfaa276117de45"
+  },
+  {
+    "file": "NotoSerifKR-Bold.woff2",
+    "families": [
+      "Noto Serif KR"
+    ],
+    "weight": 700,
+    "sha256": "504d6af6abb882acd912d47bafa383c4512a6c8c33635e4e8fb37111d9310941"
+  },
+  {
+    "file": "NotoSansKR-Regular.woff2",
+    "families": [
+      "Noto Sans KR"
+    ],
+    "weight": 400,
+    "sha256": "d1bf8649914a4fe9477a8735bf056383e44e466141fb3d61897252e06d900c1a"
+  },
+  {
+    "file": "NotoSansKR-Bold.woff2",
+    "families": [
+      "Noto Sans KR"
+    ],
+    "weight": 700,
+    "sha256": "dab3d492daa687386292cff1499225db580f931f800ee0d124eb0636378c6020"
+  },
+  {
+    "file": "NotoSansKR-ExtraLight.woff2",
+    "families": [
+      "Noto Sans KR ExtraLight"
+    ],
+    "weight": 200,
+    "sha256": "3b5cac6af73fd94fa91ded10f6cfc54c7ce52189986fe7ca6fd457208f1d3673"
+  },
+  {
+    "file": "Pretendard-Regular.woff2",
+    "families": [
+      "Pretendard"
+    ],
+    "weight": 400,
+    "sha256": "fad853f7f47c6c8b103171e7193fa095708cdcd70850a71d93aa5379e8a61d63"
+  },
+  {
+    "file": "Pretendard-Bold.woff2",
+    "families": [
+      "Pretendard"
+    ],
+    "weight": 700,
+    "sha256": "4609c3356e536fafe38f4add0daeceb3d8595d3057bce13c428c33ddbd43d362"
+  },
+  {
+    "file": "NanumMyeongjo-Regular.woff2",
+    "families": [
+      "NanumMyeongjo",
+      "Nanum Myeongjo",
+      "나눔명조"
+    ],
+    "weight": 400,
+    "sha256": "52d27bf4ee205020a4aa9eb19ef4835e4aa04a94f7742b13e69e5c8b9a74072a"
+  },
+  {
+    "file": "NanumMyeongjo-Bold.woff2",
+    "families": [
+      "NanumMyeongjo",
+      "Nanum Myeongjo",
+      "나눔명조"
+    ],
+    "weight": 700,
+    "sha256": "65c47ec072dd91cbaac538f4482be3185fb0896b5f3909aa8a9834604b1eec08"
+  },
+  {
+    "file": "D2Coding-Regular.woff2",
+    "families": [
+      "D2Coding"
+    ],
+    "weight": 400,
+    "sha256": "4d3fa8ed66fedcb1787f200bd75637b816b09057fc06da0aa783e3b305a726d8"
+  },
+  {
+    "file": "D2Coding-Bold.woff2",
+    "families": [
+      "D2Coding"
+    ],
+    "weight": 700,
+    "sha256": "cf59ac9e719ce9888870ec012cdf8cbc8ffdb632f823652d5b3ba3236ce6b7c8"
+  },
+  {
+    "file": "RHWPPublicBatang-Regular.woff2",
+    "families": [
+      "RHWP Public Batang"
+    ],
+    "weight": 400,
+    "sha256": "20d454f45cdf29cc4619e769f1f59f3b8920941b6b274a530e82d3b75e24dbfb"
+  },
+  {
+    "file": "RHWPOldHangul-Regular.woff2",
+    "families": [
+      "RHWP Old Hangul",
+      "Source Han Serif K Old Hangul"
+    ],
+    "weight": 400,
+    "sha256": "1a45a61e9a320c1bc62ca1401f7b23ceffffe8133dc2a9650ad4e12524f8dcab"
+  }
+]

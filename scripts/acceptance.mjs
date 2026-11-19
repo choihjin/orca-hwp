@@ -17,24 +17,21 @@
 // 'engine' is a real rendering difference of rhwp; 'comparison' is how pdftotext -layout splits
 // rows. A listed page that still differs is reported as a known difference and does not fail; an
 // unlisted difference fails; a listed page that now matches gets a '해결됨' warning (not a failure).
-// Each entry also pins the page as it was when confirmed: `minMatched` (matched PDF lines, lower
-// bound) and `engineLines` (engine line count). Fewer matched lines or a different engine line
-// count fails, so a new difference cannot hide on a listed page; more matched lines with the same
-// engine line count gets a '개선됨' warning.
+// Each entry lists the lines it accounts for, by position and characters (scripts/line-check.mjs):
+// a listed page fails when any other line differs, including a known difference that moved to
+// another line; when only some listed lines still differ it passes with a '개선됨' warning.
 // Known engine differences are summarised again at the very end so they cannot be overlooked.
 import { existsSync, readFileSync } from 'node:fs'
 import { ENGINE_INFO, EngineError, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { textLines } from '../agent/text-lines.js'
+import { badEntries, itemText, judgePage, lineDiff } from './line-check.mjs'
 
 const config = JSON.parse(readFileSync(new URL('./fixtures.json', import.meta.url), 'utf8'))
 const fixturesUrl = new URL('../fixtures/', import.meta.url)
 const verbose = process.argv.includes('--verbose')
 
-/**
- * @typedef {{ page: number, kind: 'engine' | 'comparison', reason: string, evidence: string,
- *   minMatched: number, engineLines: number }} KnownDifference
- */
+/** @typedef {import('./line-check.mjs').KnownDifference} KnownDifference */
 
 /** @typedef {import('../editor/engine/rhwp-adapter.js').TextRun} TextRun */
 
@@ -45,39 +42,6 @@ const verbose = process.argv.includes('--verbose')
  * @returns {string[]}
  */
 const engineLines = (runs) => textLines(runs)
-
-/** @param {string} line */
-function ends(line) {
-  const chars = [...line]
-  return `${chars[0]}${chars[chars.length - 1]}`
-}
-
-/**
- * Longest common subsequence of line keys, returned as an alignment for the report.
- * @param {string[]} expected
- * @param {string[]} actual
- * @returns {{ matched: number, ops: ({ kind: '=', e: number, a: number } | { kind: '-', e: number } | { kind: '+', a: number })[] }}
- */
-function align(expected, actual) {
-  const n = expected.length
-  const m = actual.length
-  const table = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      table[i][j] = expected[i] === actual[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
-    }
-  }
-  /** @type {any[]} */
-  const ops = []
-  let i = 0
-  let j = 0
-  while (i < n || j < m) {
-    if (i < n && j < m && expected[i] === actual[j]) ops.push({ kind: '=', e: i++, a: j++ })
-    else if (j < m && (i >= n || table[i][j + 1] >= table[i + 1][j])) ops.push({ kind: '+', a: j++ })
-    else ops.push({ kind: '-', e: i++ })
-  }
-  return { matched: table[0][0], ops }
-}
 
 /** @param {string} s @param {number} max */
 const clip = (s, max) => ([...s].length > max ? `${[...s].slice(0, max).join('')}…` : s)
@@ -103,18 +67,12 @@ for (const sample of config.samples) {
   /** @type {KnownDifference[]} */
   const known = Array.isArray(sample.knownDifferences) ? sample.knownDifferences : []
   const checkPages = Array.isArray(sample.checks) ? sample.checks.map((/** @type {{ page: number }} */ c) => c.page) : []
-  const badEntries = known.filter(
-    (k) =>
-      !checkPages.includes(k.page) ||
-      !['engine', 'comparison'].includes(k.kind) ||
-      !k.reason ||
-      !k.evidence ||
-      !Number.isInteger(k.minMatched) ||
-      !Number.isInteger(k.engineLines)
-  )
-  if (badEntries.length > 0) {
+  const problems = badEntries(known, checkPages)
+  if (problems.length > 0) {
     row.pages = 'knownDifferences 오류'
-    details.push(`${sample.name}: knownDifferences needs { page (a check page), kind 'engine'|'comparison', reason, evidence, minMatched, engineLines }: ${JSON.stringify(badEntries)}`)
+    details.push(
+      `${sample.name}: knownDifferences needs { page (a check page), kind 'engine'|'comparison', reason, evidence, lines: [[side, n, first, last], …] }: ${problems.join(' ')}`
+    )
     continue
   }
   if (!existsSync(url)) {
@@ -183,62 +141,46 @@ for (const sample of config.samples) {
           continue
         }
         const lines = engineLines(doc.pageTextRuns(check.page - 1))
-        const expected = check.lines.map((/** @type {[string, string]} */ pair) => pair.join(''))
-        const actual = lines.map(ends)
-        const { matched, ops } = align(expected, actual)
-        const exact = matched === expected.length && actual.length === expected.length
+        const { matched, engineLines: engineCount, diff } = lineDiff(check.lines, lines)
+        const expectedCount = check.lines.length
         const listed = known.filter((k) => k.page === check.page)
         const kinds = [...new Set(listed.map((k) => k.kind))].join('+')
-        const count = `${matched}/${expected.length}${actual.length !== expected.length ? `(엔진 ${actual.length})` : ''}`
-        if (exact && listed.length > 0) {
+        const count = `${matched}/${expectedCount}${engineCount !== expectedCount ? `(엔진 ${engineCount})` : ''}`
+        const verdict = judgePage(diff, listed)
+        /** @param {import('./line-check.mjs').DiffItem} item */
+        const describe = (item) =>
+          item[0] === 'engine' ? `${itemText(item)}: ${clip(lines[item[1] - 1] ?? '', 40)}` : itemText(item)
+        if (verdict.status === 'match') {
+          parts.push(`p${check.page} ${count}`)
+        } else if (verdict.status === 'resolved') {
           parts.push(`p${check.page} ${count} 해결됨`)
           warnings.push(`경고: ${sample.name} page ${check.page} now matches; remove its knownDifferences (${kinds}) if this holds`)
-        } else if (!exact && listed.length > 0) {
-          // every entry of the page pins the same snapshot; check each so a stale one shows up
-          const drift = listed.filter((k) => matched < k.minMatched || actual.length !== k.engineLines)
-          const improved = listed.filter((k) => matched > k.minMatched && actual.length === k.engineLines)
-          if (drift.length > 0) {
-            ok = false
-            parts.push(`p${check.page} ${count} 알려진 차이 바뀜(${kinds})`)
-            for (const k of drift) {
-              details.push(
-                `${sample.name} page ${check.page}: 알려진 차이(${k.kind})가 바뀜 — 일치 ${matched}줄(하한 ${k.minMatched}), ` +
-                  `엔진 ${actual.length}줄(기록 ${k.engineLines}). 다시 확인하고 knownDifferences를 고친다.`
-              )
-            }
-          } else {
-            parts.push(`p${check.page} ${count} 알려진 차이(${kinds})`)
-          }
-          for (const k of improved) {
+        } else if (verdict.status === 'fail') {
+          ok = false
+          parts.push(`p${check.page} ${count}${listed.length > 0 ? ` 알려진 차이 바뀜(${kinds})` : ''}`)
+          const shown = verbose ? verdict.unexpected : verdict.unexpected.slice(0, 6)
+          details.push(
+            `${sample.name} page ${check.page}: ${listed.length > 0 ? '알려진 차이 밖의 줄' : '목록에 없는 차이'} ` +
+              `${verdict.unexpected.length}개 (일치 ${matched}/${expectedCount}, 엔진 ${engineCount}줄)` +
+              shown.map((item) => `\n    ${describe(item)}`).join('') +
+              (shown.length < verdict.unexpected.length ? `\n    … ${verdict.unexpected.length - shown.length} more (--verbose)` : '')
+          )
+        } else {
+          parts.push(`p${check.page} ${count} 알려진 차이(${kinds})`)
+          row.known++
+          if (verdict.status === 'improved') {
             warnings.push(
-              `경고: ${sample.name} page ${check.page} 개선됨 — 일치 ${matched}줄 > 하한 ${k.minMatched}(${k.kind}); 확인 후 minMatched를 올린다`
+              `경고: ${sample.name} page ${check.page} 개선됨 — 목록의 ${verdict.gone.length}줄이 이제 맞는다 ` +
+                `(${verdict.gone.map(itemText).join(', ')}); 확인 후 lines에서 지운다`
             )
           }
-          row.known++
           for (const k of listed) {
             details.push(`${sample.name} page ${check.page}: 알려진 차이(${k.kind}) ${k.reason}`)
             if (k.kind === 'engine') {
-              engineDifferences.push({ sample: sample.name, page: check.page, reason: k.reason, matched, expected: expected.length, engine: actual.length })
+              engineDifferences.push({ sample: sample.name, page: check.page, reason: k.reason, matched, expected: expectedCount, engine: engineCount })
             }
           }
-        } else {
-          parts.push(`p${check.page} ${count}`)
-        }
-        if (!exact && (listed.length === 0 || verbose)) {
-          if (listed.length === 0) ok = false
-          const misses = ops.filter((op) => op.kind !== '=')
-          const shown = verbose ? misses : misses.slice(0, 6)
-          details.push(
-            `${sample.name} page ${check.page}: ${listed.length === 0 ? '목록에 없는 차이, ' : ''}${matched} of ${expected.length} PDF lines matched, engine has ${actual.length} lines` +
-              shown
-                .map((op) =>
-                  op.kind === '-'
-                    ? `\n    PDF only    line ${op.e + 1}: first "${check.lines[op.e][0]}" last "${check.lines[op.e][1]}"`
-                    : `\n    engine only line ${op.a + 1}: ${clip(lines[op.a], 40)}`
-                )
-                .join('') +
-              (shown.length < misses.length ? `\n    … ${misses.length - shown.length} more (--verbose)` : '')
-          )
+          if (verbose) details.push(...diff.map((item) => `    ${describe(item)}`))
         }
       }
       row.lines = parts.join(', ')

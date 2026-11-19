@@ -4,8 +4,12 @@
 // Allow-list rules (design 5.4): only the elements and attributes listed below are kept; the
 // rest are dropped with their content. `<a>` is unwrapped. `href` may only point inside the page
 // (`#id`) or, on `<image>`, at a `data:image/` URL. `url()` may only point inside the page.
-// `<style>` is removed; `@font-face` rules whose sources are all `data:` URLs are returned in
-// `fontFaces` for the caller's one head stylesheet. Every `id` and every `#id` reference gets
+// `<style>` is removed; `@font-face` rules whose sources are all `data:` fonts are rebuilt and
+// returned in `fontFaces` for the caller's one head stylesheet.
+//
+// Attribute values are judged the way the browser will read them: XML entities decoded first,
+// then CSS `url()` matched case-insensitively with any quoting. Only what passes is written
+// back, rebuilt (`url(#prefix-id)`) and re-escaped, so no other spelling reaches the page. Every `id` and every `#id` reference gets
 // the page prefix so pages placed in one document do not share ids.
 //
 // The input must be well-formed XML with one `<svg>` root; anything else is a SanitizeError and
@@ -62,8 +66,19 @@ const TAG_END = /\s*(\/?)>/y
 const CLOSE = /<\/([A-Za-z_:][^\s/>=<"'&]*)\s*>/y
 /** An `&` that does not start an XML predefined or numeric entity. */
 const BAD_AMPERSAND = /&(?!(?:#[0-9]+|#x[0-9a-fA-F]+|lt|gt|amp|quot|apos);)/
-const LOCAL_URL = /url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g
+/** A CSS url() in any case and quoting; group 1/2/3 is the double-, single- or unquoted target. */
+const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]*))\s*\)/gi
+/** What may follow `#` in a reference we write back. */
+const FRAGMENT = /^[^\s"'<>()\\]+$/
+/** CSS functions an allowed attribute may contain: transforms and colours, nothing that loads. */
+const SAFE_FUNCTIONS = new Set(
+  'matrix translate translatex translatey scale scalex scaley rotate skewx skewy rgb rgba hsl hsla'.split(' ')
+)
 const CLASS_VALUE = /^[\w\s-]*$/
+const PLAIN_VALUE = /^[\w\s.,#%+-]*$/
+const DATA_IMAGE = /^data:image\/[^\s"'<>\\]*$/i
+const DATA_FONT =
+  /^data:(?:font\/[\w.+-]+|application\/(?:font-woff2?|font-sfnt|x-font-[\w.+-]+|vnd\.ms-fontobject|octet-stream))(?:;[\w.+-]+=[\w.+-]+)*(?:;base64)?,[A-Za-z0-9+/=%._~-]*$/i
 
 /**
  * @param {string} value raw attribute value or text
@@ -76,13 +91,108 @@ function checkCharacterData(value, where) {
 
 /** @param {string} s */
 function decodeEntities(s) {
+  if (!s.includes('&')) return s
   return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|lt|gt|amp|quot|apos);/g, (_, e) => {
     if (e[0] === '#') {
       const code = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)
-      return code <= 0x10ffff ? String.fromCodePoint(code) : '�'
+      const valid = code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+      return valid ? String.fromCodePoint(code) : '\ufffd'
     }
     return { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }[/** @type {'lt'} */ (e)]
   })
+}
+
+/** @param {string} s decoded value, written inside double quotes */
+function escapeAttribute(s) {
+  if (!/[&<>"]/.test(s)) return s
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/**
+ * Splits at `separator` outside quotes and parentheses.
+ * @param {string} s
+ * @param {string} separator
+ */
+function splitTopLevel(s, separator) {
+  /** @type {string[]} */
+  const parts = []
+  let depth = 0
+  /** @type {string | null} */
+  let quote = null
+  let start = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (quote) {
+      if (c === quote) quote = null
+    } else if (c === '"' || c === "'") quote = c
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === separator && depth === 0) {
+      parts.push(s.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(s.slice(start))
+  return parts
+}
+
+const FONT_SOURCE =
+  /^url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]*))\s*\)(?:\s+format\(\s*(?:"([\w.-]+)"|'([\w.-]+)'|([\w.-]+))\s*\))?$/i
+
+/** @type {Record<string, RegExp>} */
+const FONT_DESCRIPTORS = {
+  'font-weight': /^(?:normal|bold|bolder|lighter|\d{1,4})(?:\s+\d{1,4})?$/i,
+  'font-style': /^(?:normal|italic|oblique)(?:\s+-?\d+(?:\.\d+)?deg){0,2}$/i,
+  'font-stretch': /^(?:[a-z-]+|\d+(?:\.\d+)?%)(?:\s+\d+(?:\.\d+)?%)?$/i,
+  'font-display': /^(?:auto|block|swap|fallback|optional)$/i,
+  'unicode-range': /^u\+[0-9a-f?]{1,6}(?:-[0-9a-f]{1,6})?(?:\s*,\s*u\+[0-9a-f?]{1,6}(?:-[0-9a-f]{1,6})?)*$/i
+}
+
+/**
+ * Rebuilds one `@font-face` body from allowed descriptors, or says why it cannot.
+ * `src` may only list `url(<data: font>)` with an optional `format()`; anything else (`local()`,
+ * other URLs, `tech()`, other properties) refuses the whole rule.
+ * @param {string} body text between the braces, entities decoded, comments removed
+ * @returns {{ rule: string } | { reason: string }}
+ */
+function rebuildFontFace(body) {
+  if (/[\\<>]/.test(body)) return { reason: 'CSS escape or markup character' }
+  /** @type {string[]} */
+  const out = []
+  let family = false
+  let source = false
+  for (const declaration of splitTopLevel(body, ';')) {
+    if (!declaration.trim()) continue
+    const colon = declaration.indexOf(':')
+    if (colon === -1) return { reason: `not a declaration: ${declaration.trim().slice(0, 30)}` }
+    const property = declaration.slice(0, colon).trim().toLowerCase()
+    const value = declaration.slice(colon + 1).trim()
+    if (property === 'font-family') {
+      const m = /^(?:"([^"]*)"|'([^']*)'|([^"'(){};,]+))$/.exec(value)
+      const name = m ? (m[1] ?? m[2] ?? m[3]).trim() : ''
+      if (!name || /["'(){};,]/.test(name)) return { reason: `font-family ${value.slice(0, 30)}` }
+      out.push(`font-family:"${name}"`)
+      family = true
+    } else if (property === 'src') {
+      /** @type {string[]} */
+      const items = []
+      for (const item of splitTopLevel(value, ',')) {
+        const m = FONT_SOURCE.exec(item.trim())
+        const url = m ? (m[1] ?? m[2] ?? m[3]).trim() : ''
+        if (!m || !DATA_FONT.test(url)) return { reason: `src is not data: fonts only: ${item.trim().slice(0, 40)}` }
+        const format = m[4] ?? m[5] ?? m[6]
+        items.push(`url("${url}")${format ? ` format("${format}")` : ''}`)
+      }
+      out.push(`src:${items.join(',')}`)
+      source = true
+    } else if (FONT_DESCRIPTORS[property]?.test(value)) {
+      out.push(`${property}:${value}`)
+    } else {
+      return { reason: `descriptor ${property}` }
+    }
+  }
+  if (!family || !source) return { reason: 'needs font-family and src' }
+  return { rule: `@font-face{${out.join(';')}}` }
 }
 
 /** @param {string} s */
@@ -128,19 +238,14 @@ function fontFacesFrom(css, warn) {
       warn(`removed CSS rule: ${rule.slice(0, 40)}`)
       continue
     }
-    const body = rule.slice(rule.indexOf('{'))
-    const urls = [...body.matchAll(/url\(\s*(['"]?)([^'")]*)/gi)].map((m) => m[2].trim())
-    if (
-      body.includes('<') ||
-      body.includes('\\') ||
-      /@import|expression\s*\(/i.test(body) ||
-      urls.length === 0 ||
-      !urls.every((u) => /^data:/i.test(u))
-    ) {
-      warn(`removed @font-face that is not data: only: ${rule.slice(0, 40)}`)
+    const open = rule.indexOf('{')
+    const close = rule.lastIndexOf('}')
+    const rebuilt = rebuildFontFace(rule.slice(open + 1, close > open ? close : rule.length))
+    if ('reason' in rebuilt) {
+      warn(`removed @font-face (${rebuilt.reason})`)
       continue
     }
-    faces.push(rule)
+    faces.push(rebuilt.rule)
   }
   return faces
 }
@@ -158,8 +263,13 @@ export function sanitizeSvg(svg, prefix) {
   const faces = new Set()
   /** @type {Map<string, number>} */
   const warningCounts = new Map()
+  /** @type {string | null} */
+  let lastWarning = null
   /** @param {string} w */
-  const warn = (w) => warningCounts.set(w, (warningCounts.get(w) ?? 0) + 1)
+  const warn = (w) => {
+    warningCounts.set(w, (warningCounts.get(w) ?? 0) + 1)
+    lastWarning = w
+  }
 
   /** @type {{ name: string, mode: 'keep' | 'unwrap' | 'drop' | 'style' }[]} */
   const stack = []
@@ -169,25 +279,24 @@ export function sanitizeSvg(svg, prefix) {
   let rootSeen = false
   let rootClosed = false
 
-  /** @param {string} value */
-  const prefixRefs = (value) => value.replace(LOCAL_URL, (_, _q, id) => `url(#${prefix}${id})`)
-
   /**
    * @param {string} element
    * @param {string} name
-   * @param {string} value raw (entities kept)
-   * @returns {string | null} value to write, or null to drop
+   * @param {string} raw attribute value as written (entities not decoded)
+   * @returns {string | null} escaped value to write, or null to drop
    */
-  const attributeValue = (element, name, value) => {
+  const judgeAttribute = (element, name, raw) => {
     if (!ALLOWED_ATTRIBUTES.has(name)) {
       warn(`removed attribute ${name}`)
       return null
     }
-    if (name === 'id') return prefix + value
+    const value = decodeEntities(raw)
+    if (name === 'id') return escapeAttribute(prefix + value)
     if (name === 'href' || name === 'xlink:href') {
-      const v = value.trim()
-      if (v.startsWith('#')) return `#${prefix}${v.slice(1)}`
-      if (element === 'image' && /^data:image\//i.test(v)) return v
+      // URL parsing strips leading/trailing C0 controls and spaces
+      const v = value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '')
+      if (v.startsWith('#') && FRAGMENT.test(v.slice(1))) return escapeAttribute(`#${prefix}${v.slice(1)}`)
+      if (element === 'image' && DATA_IMAGE.test(v)) return escapeAttribute(v)
       warn(`removed ${name} on <${element}> that is not #id${element === 'image' ? ' or data:image/' : ''}`)
       return null
     }
@@ -195,12 +304,66 @@ export function sanitizeSvg(svg, prefix) {
       warn('removed class with unusual characters')
       return null
     }
-    const v = value.includes('url(') ? prefixRefs(value) : value
-    if (/url\(\s*['"]?(?!#)/i.test(v) || /javascript:/i.test(v)) {
+    if (value.includes('\\') || value.includes('\u0000')) {
+      warn(`removed ${name} with a CSS escape or NUL`)
+      return null
+    }
+    // Local references become placeholders; whatever is left must hold no url() or other
+    // resource function in any spelling.
+    /** @type {string[]} */
+    const refs = []
+    let outside = false
+    const marked = value.replace(CSS_URL, (_, dq, sq, bare) => {
+      const target = /** @type {string} */ (dq ?? sq ?? bare).replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '')
+      if (!target.startsWith('#') || !FRAGMENT.test(target.slice(1))) {
+        outside = true
+        return ''
+      }
+      refs.push(`url(#${prefix}${target.slice(1)})`)
+      return `\u0000${refs.length - 1}\u0000`
+    })
+    const unquoted = marked.replace(/"[^"]*"|'[^']*'/g, '')
+    const functions = [...unquoted.matchAll(/([A-Za-z_-][\w-]*)\s*\(/g)].map((m) => m[1].toLowerCase())
+    if (
+      outside ||
+      functions.some((f) => !SAFE_FUNCTIONS.has(f)) ||
+      /\(/.test(unquoted.replace(/[A-Za-z_-][\w-]*\s*\(/g, '')) ||
+      /javascript:/i.test(value.replace(/[\u0000-\u0020]/g, ''))
+    ) {
       warn(`removed ${name} that points outside the page`)
       return null
     }
-    return v
+    return escapeAttribute(marked.replace(/\u0000(\d+)\u0000/g, (_, i) => refs[Number(i)]))
+  }
+
+  // rhwp repeats the same long font-family and colour values thousands of times per page
+  /** @type {Map<string, { value: string | null, warning: string | null }>} */
+  const judged = new Map()
+  /**
+   * @param {string} element
+   * @param {string} name
+   * @param {string} raw
+   * @returns {string | null}
+   */
+  const attributeValue = (element, name, raw) => {
+    // numbers, colours, keywords: no "(", ":", quote, "&" or "<", so no url() or scheme possible
+    if (PLAIN_VALUE.test(raw) && ALLOWED_ATTRIBUTES.has(name) && name !== 'id' && name !== 'href' && name !== 'xlink:href') {
+      return raw
+    }
+    if (name === 'id' || raw.length > 4096) return judgeAttribute(element, name, raw)
+    const key = `${element}\u0000${name}\u0000${raw}`
+    let hit = judged.get(key)
+    if (!hit) {
+      const before = lastWarning
+      lastWarning = null
+      const value = judgeAttribute(element, name, raw)
+      hit = { value, warning: lastWarning }
+      lastWarning = before
+      judged.set(key, hit)
+    } else if (hit.warning) {
+      warn(hit.warning)
+    }
+    return hit.value
   }
 
   const s = svg.charCodeAt(0) === 0xfeff ? svg.slice(1) : svg
@@ -325,7 +488,7 @@ export function sanitizeSvg(svg, prefix) {
       const parts = [`<${name}`]
       for (const [attrName, value] of attributes) {
         const v = attributeValue(name, attrName, value)
-        if (v !== null) parts.push(` ${attrName}="${v.replace(/"/g, '&quot;')}"`)
+        if (v !== null) parts.push(` ${attrName}="${v}"`)
       }
       parts.push(selfClosing ? '/>' : '>')
       out.push(parts.join(''))

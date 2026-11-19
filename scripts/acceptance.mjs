@@ -6,51 +6,38 @@
 // Per sample:
 //   - opens with the same adapter as the viewer (editor/engine/rhwp-adapter.js)
 //   - page count equals the reference PDF's (when there is one)
-//   - on the check pages, the engine's lines (text runs grouped by baseline, see engineLines)
+//   - on the check pages, the engine's lines (text runs grouped by agent/text-lines.js textLines)
 //     have the same first and last character as the PDF's lines, in the same order
 //   - every page goes through renderPageSvg + sanitizeSvg without an exception
 //   - the time to the first page (open + render + sanitize page 1) is printed, not judged
 //   - a sample marked expectError must fail to open with an EngineError
+//
+// Known differences: a sample's `knownDifferences` in fixtures.json lists check pages whose line
+// differences were confirmed by hand, each { page, kind: 'engine' | 'comparison', reason, evidence }.
+// 'engine' is a real rendering difference of rhwp; 'comparison' is how pdftotext -layout splits
+// rows. A listed page that still differs is reported as a known difference and does not fail; an
+// unlisted difference fails; a listed page that now matches gets a '해결됨' warning (not a failure).
+// Known engine differences are summarised again at the very end so they cannot be overlooked.
 import { existsSync, readFileSync } from 'node:fs'
-import { EngineError, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
+import { ENGINE_INFO, EngineError, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
+import { textLines } from '../agent/text-lines.js'
 
 const config = JSON.parse(readFileSync(new URL('./fixtures.json', import.meta.url), 'utf8'))
 const fixturesUrl = new URL('../fixtures/', import.meta.url)
 const verbose = process.argv.includes('--verbose')
 
+/** @typedef {{ page: number, kind: 'engine' | 'comparison', reason: string, evidence: string }} KnownDifference */
+
 /** @typedef {import('../editor/engine/rhwp-adapter.js').TextRun} TextRun */
 
 /**
- * Groups a page's text runs into lines by estimated baseline, left to right within a line.
- * A run's `y` is the top of its box; rhwp puts the SVG baseline at about y + 0.85 h. Runs whose
- * baselines are within 3 px of the line's first run share the line.
- *
- * Interim: Task 8's `textLines` (editor/render/text-lines.js) is meant to replace this once it is
- * merged, so the agent path and this check group lines the same way.
+ * A page's lines, grouped by the same rule as the agent path (agent/text-lines.js), so this check
+ * and `agent-view.mjs --text` split lines alike.
  * @param {TextRun[]} runs
- * @returns {string[]} each line's text, trimmed, blank lines dropped
+ * @returns {string[]}
  */
-function engineLines(runs) {
-  const placed = runs
-    .filter((run) => run.text.trim() !== '')
-    .map((run) => ({ run, baseline: run.y + run.h * 0.85 }))
-    .sort((a, b) => a.baseline - b.baseline || a.run.x - b.run.x)
-  /** @type {{ baseline: number, runs: TextRun[] }[]} */
-  const lines = []
-  for (const { run, baseline } of placed) {
-    const line = lines[lines.length - 1]
-    if (line && baseline - line.baseline <= 3) line.runs.push(run)
-    else lines.push({ baseline, runs: [run] })
-  }
-  return lines.map((line) =>
-    line.runs
-      .sort((a, b) => a.x - b.x)
-      .map((run) => run.text)
-      .join('')
-      .trim()
-  )
-}
+const engineLines = (runs) => textLines(runs)
 
 /** @param {string} line */
 function ends(line) {
@@ -93,15 +80,30 @@ const msText = (ms) => `${Math.round(ms)} ms`
 
 await initEngine(new Uint8Array(readFileSync(new URL('../editor/vendor/rhwp/rhwp_bg.wasm', import.meta.url))))
 
-/** @type {{ name: string, pages: string, lines: string, render: string, first: string, ok: boolean }[]} */
+/** @type {{ name: string, pages: string, lines: string, render: string, first: string, ok: boolean, known: number }[]} */
 const rows = []
 /** @type {string[]} */
 const details = []
+/** @type {string[]} */
+const warnings = []
+/** @type {{ sample: string, page: number, reason: string, matched: number, expected: number, engine: number }[]} */
+const engineDifferences = []
 
 for (const sample of config.samples) {
   const url = new URL(encodeURIComponent(sample.file), fixturesUrl)
-  const row = { name: sample.name, pages: '-', lines: '-', render: '-', first: '-', ok: false }
+  const row = { name: sample.name, pages: '-', lines: '-', render: '-', first: '-', ok: false, known: 0 }
   rows.push(row)
+  /** @type {KnownDifference[]} */
+  const known = Array.isArray(sample.knownDifferences) ? sample.knownDifferences : []
+  const checkPages = Array.isArray(sample.checks) ? sample.checks.map((/** @type {{ page: number }} */ c) => c.page) : []
+  const badEntries = known.filter(
+    (k) => !checkPages.includes(k.page) || !['engine', 'comparison'].includes(k.kind) || !k.reason || !k.evidence
+  )
+  if (badEntries.length > 0) {
+    row.pages = 'knownDifferences 오류'
+    details.push(`${sample.name}: knownDifferences needs { page (a check page), kind 'engine'|'comparison', reason, evidence }: ${JSON.stringify(badEntries)}`)
+    continue
+  }
   if (!existsSync(url)) {
     row.pages = '파일 없음'
     details.push(`${sample.name}: fixtures/${sample.file} is missing; run npm run fixtures`)
@@ -172,13 +174,30 @@ for (const sample of config.samples) {
         const actual = lines.map(ends)
         const { matched, ops } = align(expected, actual)
         const exact = matched === expected.length && actual.length === expected.length
-        parts.push(`p${check.page} ${matched}/${expected.length}${actual.length !== expected.length ? `(엔진 ${actual.length})` : ''}`)
-        if (!exact) {
-          ok = false
+        const listed = known.filter((k) => k.page === check.page)
+        const kinds = [...new Set(listed.map((k) => k.kind))].join('+')
+        const count = `${matched}/${expected.length}${actual.length !== expected.length ? `(엔진 ${actual.length})` : ''}`
+        if (exact && listed.length > 0) {
+          parts.push(`p${check.page} ${count} 해결됨`)
+          warnings.push(`경고: ${sample.name} page ${check.page} now matches; remove its knownDifferences (${kinds}) if this holds`)
+        } else if (!exact && listed.length > 0) {
+          parts.push(`p${check.page} ${count} 알려진 차이(${kinds})`)
+          row.known++
+          for (const k of listed) {
+            details.push(`${sample.name} page ${check.page}: 알려진 차이(${k.kind}) ${k.reason}`)
+            if (k.kind === 'engine') {
+              engineDifferences.push({ sample: sample.name, page: check.page, reason: k.reason, matched, expected: expected.length, engine: actual.length })
+            }
+          }
+        } else {
+          parts.push(`p${check.page} ${count}`)
+        }
+        if (!exact && (listed.length === 0 || verbose)) {
+          if (listed.length === 0) ok = false
           const misses = ops.filter((op) => op.kind !== '=')
           const shown = verbose ? misses : misses.slice(0, 6)
           details.push(
-            `${sample.name} page ${check.page}: ${matched} of ${expected.length} PDF lines matched, engine has ${actual.length} lines` +
+            `${sample.name} page ${check.page}: ${listed.length === 0 ? '목록에 없는 차이, ' : ''}${matched} of ${expected.length} PDF lines matched, engine has ${actual.length} lines` +
               shown
                 .map((op) =>
                   op.kind === '-'
@@ -203,12 +222,17 @@ const header = { name: '표본', pages: '쪽(엔진/기대)', lines: '줄 첫·�
 const width = (s) => [...s].reduce((w, c) => w + (/[ᄀ-ᇿ　-鿿가-힯＀-￯]/.test(c) ? 2 : 1), 0)
 /** @param {string} s @param {number} w */
 const pad = (s, w) => s + ' '.repeat(Math.max(0, w - width(s)))
-const table = [header, ...rows.map((r) => ({ ...r, ok: r.ok ? '합격' : '불합격' }))]
+const table = [header, ...rows.map((r) => ({ ...r, ok: r.ok ? (r.known > 0 ? `합격(알려진 차이 ${r.known}쪽)` : '합격') : '불합격' }))]
 /** @type {(keyof typeof header)[]} */
 const columns = ['name', 'pages', 'lines', 'render', 'first', 'ok']
 const widths = columns.map((c) => Math.max(...table.map((r) => width(String(r[c])))))
 for (const r of table) console.log(columns.map((c, k) => pad(String(r[c]), widths[k])).join(' | '))
 if (details.length > 0) console.log(`\n${details.join('\n')}`)
+if (warnings.length > 0) console.log(`\n${warnings.join('\n')}`)
 const failed = rows.filter((r) => !r.ok).length
 console.log(`\n${rows.length - failed}/${rows.length} 합격`)
+console.log(`\n알려진 엔진 차이 (rhwp ${ENGINE_INFO.version}, 합격으로 세지만 렌더가 기준 PDF와 다름): ${engineDifferences.length}건`)
+for (const d of engineDifferences) {
+  console.log(`  - ${d.sample} ${d.page}쪽 (줄 ${d.matched}/${d.expected}, 엔진 ${d.engine}줄): ${d.reason}`)
+}
 process.exit(failed === 0 ? 0 : 1)

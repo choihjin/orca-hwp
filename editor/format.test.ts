@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { detectKind, formatSize } from './format'
+import { detectKind, formatSize } from './format.js'
 
 test('detects a ZIP package as hwpx', () => {
   assert.equal(detectKind(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0])), 'hwpx')

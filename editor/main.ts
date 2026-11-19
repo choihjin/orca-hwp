@@ -1,4 +1,4 @@
-import { detectKind, formatSize } from './format'
+import { detectKind, formatSize } from './format.js'
 
 // Scaffold only: shows what kind of file this is. Rendering the document goes here.
 const root = document.createElement('div')

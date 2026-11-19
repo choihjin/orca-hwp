@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko" data-render-state="loading">
+<head>
+<meta charset="utf-8">
+<title>HWP Viewer</title>
+<link rel="stylesheet" href="./fonts/fonts.css">
+<link rel="stylesheet" href="./view/viewer.css">
+</head>
+<body>
+<header class="status">
+  <span id="status-text" class="status-text" role="status">HWP 뷰어 · 엔진 준비 중…</span>
+  <button id="about-button" type="button" title="정보 (고지·라이선스)" aria-label="정보">ⓘ</button>
+</header>
+<main id="view" class="view" tabindex="0"></main>
+<section id="about" class="about" role="dialog" aria-label="정보" hidden></section>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>

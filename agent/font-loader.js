@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { hasRequestedFamily, matchFontFace } from './sfnt.js'
+import { decodeWoff1 } from './woff1.js'
 
 const fontsDir = new URL('../editor/fonts/', import.meta.url)
 const decoderUrl = new URL('./vendor/woff2/decode.mjs', import.meta.url)
@@ -92,7 +93,9 @@ function loadLocalFonts(dir, fontBuffers, warnings, requested) {
 
 /** @param {Buffer} bytes */
 async function decodeFont(bytes) {
-  if (bytes.toString('ascii', 0, 4) !== 'wOF2') return bytes
+  const format = bytes.toString('ascii', 0, 4)
+  if (format === 'wOFF') return decodeWoff1(bytes)
+  if (format !== 'wOF2') return bytes
   if (!woff2Decoder) throw new Error('WOFF2 decoder is missing')
   const { decodeWoff2 } = await woff2Decoder()
   return decodeWoff2(bytes)
@@ -105,6 +108,10 @@ async function loadEmbeddedFace(face, warnings) {
       .map(([, name, value]) => [name.toLowerCase(), value.trim()])
   )
   const family = declarations.get('font-family')?.replace(/^(['"])(.*)\1$/, '$2')
+  if (declarations.has('unicode-range')) {
+    warnings.push(`Skipped embedded SVG font${family ? ` "${family}"` : ''}: resvg cannot apply unicode-range`)
+    return null
+  }
   const rawWeight = declarations.get('font-weight')?.toLowerCase()
   const weight = rawWeight === 'bold' ? 700 : Number(rawWeight)
   const targetWeight = Number.isInteger(weight) && weight >= 1 && weight <= 1000 ? weight : 400

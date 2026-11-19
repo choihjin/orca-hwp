@@ -119,29 +119,72 @@ function writePng(path, bytes, inputStat) {
   // changed between the initial check and this write.
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT)
   try {
-    rejectInputAsOutput(inputStat, fstatSync(fd, { bigint: true }))
-    ftruncateSync(fd, 0)
+    const output = fstatSync(fd, { bigint: true })
+    rejectInputAsOutput(inputStat, output)
+    if (output.isFile()) ftruncateSync(fd, 0)
     writeFileSync(fd, bytes)
   } finally {
     closeSync(fd)
   }
 }
 
-function prepareSvg(svg, { width, height }) {
+function prepareSvg(svg, { width, height }, viewBox) {
   const root = /<svg(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/.exec(svg)
   if (!root) throw new CliError('render-failed', 'The page SVG has no root element')
   const attributes = root[0].slice(4, -1).replace(
     /\s+([^\s=]+)\s*=\s*(?:"[^"]*"|'[^']*')/g,
     (attribute, name) => {
-      if (name === 'width' || name === 'height' || name === 'preserveAspectRatio') return ''
+      if (name === 'width' || name === 'height' || name === 'preserveAspectRatio' ||
+          (viewBox && name === 'viewBox')) return ''
       return attribute
     }
   )
   const viewport = `width="${width}" height="${height}" preserveAspectRatio="none"`
-  return svg.replace(root[0], `<svg${attributes} ${viewport}>`)
+  const box = viewBox ? ` viewBox="${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}"` : ''
+  return svg.replace(root[0], `<svg${attributes} ${viewport}${box}>`)
 }
 
-async function renderPng(svg, fontBuffers, crop) {
+function prepareRegion(svg, region, pageSize, pixels) {
+  const visible = {
+    ...region,
+    width: Math.min(region.width, pageSize.width - region.x),
+    height: Math.min(region.height, pageSize.height - region.y)
+  }
+  const dimensions = {
+    width: Math.max(1, Math.round(pixels.width * (visible.width / region.width))),
+    height: Math.max(1, Math.round(pixels.height * (visible.height / region.height)))
+  }
+  const pad = dimensions.width < pixels.width || dimensions.height < pixels.height
+    ? { x: 0, y: 0, ...pixels }
+    : undefined
+
+  // resvg 0.34 traps when an isolated layer lies beyond its internal render
+  // bounds. Skip rhwp's offscreen rectangle clips (including image viewports)
+  // and use the output viewport itself when it is wholly inside a clip.
+  const rectClips = new Map([...svg.matchAll(/<clipPath id="([^"]+)"><rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"\/><\/clipPath>/g)]
+    .map(([, id, ...bounds]) => [id, bounds.map(Number)]))
+  const right = visible.x + visible.width
+  const bottom = visible.y + visible.height
+  const disjoint = ([x, y, w, h]) =>
+    x >= right || y >= bottom || x + w <= visible.x || y + h <= visible.y
+  const anchor = `<rect x="${visible.x}" y="${visible.y}" width="${visible.width}" height="${visible.height}" fill="#000" fill-opacity="0"/>`
+  const cropped = svg.replace(/<g clip-path="url\(#([^"]+)\)">/g, (tag, id) => {
+    const bounds = rectClips.get(id)
+    if (!bounds) return tag
+    if (disjoint(bounds)) return '<g display="none">'
+    const [x, y, w, h] = bounds
+    if (x <= visible.x && y <= visible.y && x + w >= right && y + h >= bottom) return '<g>'
+    // Preserve partially visible clips and give their layers transparent
+    // content in the crop so the layer bounds intersect the viewport.
+    return tag + anchor
+  }).replace(
+    /<svg x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)" viewBox="[^"]+" preserveAspectRatio="none">/g,
+    (tag, x, y, w, h) => disjoint([x, y, w, h].map(Number)) ? tag.slice(0, -1) + ' display="none">' : tag
+  )
+  return { svg: prepareSvg(cropped, dimensions, visible), pad }
+}
+
+async function renderPng(svg, fontBuffers, pad) {
   const { initWasm, Resvg } = await import('./vendor/resvg/index.mjs')
   await initWasm(readFileSync(resvgWasm))
   const renderer = new Resvg(svg, {
@@ -157,11 +200,11 @@ async function renderPng(svg, fontBuffers, crop) {
   // A WASM trap can leave the renderer borrowed. Freeing it after a trap masks the
   // original error, so release the objects only after the WASM calls succeed.
   const image = renderer.render()
-  const rendered = crop
+  const rendered = pad
     ? { pixels: image.pixels, width: image.width, height: image.height }
     : image.asPng()
   try {
-    return crop ? cropPng(rendered, crop) : rendered
+    return pad ? cropPng(rendered, pad) : rendered
   } finally {
     image.free()
     renderer.free()
@@ -183,20 +226,15 @@ async function renderPage(options) {
     if (region && (region.x >= pageSize.width || region.y >= pageSize.height)) {
       throw new CliError('region-out-of-page', '--region does not overlap the page')
     }
-    const pageDimensions = scaledDimensions(pageSize, scale)
-    const crop = region && {
-      x: Math.round(region.x * scale),
-      y: Math.round(region.y * scale),
-      ...scaledDimensions(region, scale)
-    }
+    const dimensions = scaledDimensions(region ?? pageSize, scale)
     const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
     const warnings = [...result.warnings]
-    // Moving the SVG viewBox can trap inside resvg. Use the same viewport as a
-    // whole-page render and crop its pixels afterwards.
-    const svg = prepareSvg(result.svg, pageDimensions)
-    const fonts = await prepareFonts(svg, bundledFontsOnly, warnings, result.fontFaces)
+    const viewport = region
+      ? prepareRegion(result.svg, region, pageSize, dimensions)
+      : { svg: prepareSvg(result.svg, dimensions) }
+    const fonts = await prepareFonts(viewport.svg, bundledFontsOnly, warnings, result.fontFaces)
     const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
-    const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, crop)
+    const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, viewport.pad)
     const png = outputPath ?? join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
     writePng(png, pngBytes, stat)
     return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings }

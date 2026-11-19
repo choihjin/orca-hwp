@@ -1,6 +1,6 @@
 // Read only the name tables during system font discovery. Bundled and document
 // faces can be given the family and weight declared by their stylesheet.
-import { closeSync, openSync, readSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 
 const opentypeTags = new Set([0x00010000, 0x4f54544f, 0x74727565, 0x74797031])
 const utf16be = new TextDecoder('utf-16be')
@@ -52,22 +52,25 @@ function familyNames(table, ids = [1, 16]) {
 export function hasRequestedFamily(path, requested) {
   const fd = openSync(path, 'r')
   try {
+    const { size } = fstatSync(fd)
     /** @type {FontReader} */
     const read = (offset, length) => {
+      if (offset > size || length > size - offset) throw new Error('OpenType data is outside the font file')
       const bytes = Buffer.alloc(length)
-      return bytes.subarray(0, readSync(fd, bytes, 0, length, offset))
+      if (readSync(fd, bytes, 0, length, offset) !== length) throw new Error('Truncated OpenType data')
+      return bytes
     }
     const header = read(0, 12)
-    if (header.length < 12) return false
     const collection = header.toString('ascii', 0, 4) === 'ttcf'
     const offsets = collection ? read(12, header.readUInt32BE(8) * 4) : Buffer.alloc(4)
+    let matched = false
     for (let i = 0; i + 4 <= offsets.length; i += 4) {
       const table = tablesAt(read, offsets.readUInt32BE(i)).get('name')
       if (table && familyNames(read(table.offset, table.size)).some((name) => requested.has(name.toLowerCase()))) {
-        return true
+        matched = true
       }
     }
-    return false
+    return matched
   } finally {
     closeSync(fd)
   }

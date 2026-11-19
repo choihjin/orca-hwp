@@ -77,6 +77,22 @@ test('a crop crossing the right edge on page 3 of the NIKL plan renders at the r
   })
 })
 
+test('a high-scale region is limited by its own bitmap size', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const result = run([sample, '--region', '100,250,100,30', '--scale', '5', '--out', 'detail.png'], dir)
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const png = readFileSync(JSON.parse(result.stdout).png)
+    assert.equal(png.subarray(0, 8).toString('hex'), pngSignature)
+    assert.equal(png.readUInt32BE(16), 500)
+    assert.equal(png.readUInt32BE(20), 150)
+    if (process.platform !== 'win32') {
+      const discard = run([sample, '--region', '100,250,100,30', '--scale', '5', '--out', '/dev/null'], dir)
+      assert.equal(discard.status, 0, discard.stderr || discard.stdout)
+    }
+  })
+})
+
 for (const { file, pageCount } of referenceSamples) {
   test(`center crops render on the first five available pages of ${file}`, () => {
     const input = join(fixtures, file)
@@ -166,7 +182,7 @@ test('the CLI accepts a tiny region but rejects disjoint regions and oversized b
     assert.equal(png.readUInt32BE(16), 15)
     assert.equal(png.readUInt32BE(20), 15)
     assertError(run([sample, '--region', '1000,0,250,250', '--out', 'disjoint.png'], dir), 'region-out-of-page')
-    assertError(run([sample, '--region', '0,0,10,10', '--scale', '10', '--out', 'oversized-page.png'], dir), 'invalid-argument')
+    assertError(run([sample, '--scale', '10', '--out', 'oversized-page.png'], dir), 'invalid-argument')
     assertError(run([sample, '--region', '0,0,5000,5000', '--out', 'oversized-crop.png'], dir), 'invalid-argument')
     for (const output of ['disjoint.png', 'oversized-page.png', 'oversized-crop.png']) {
       assert.ok(!existsSync(join(dir, output)))

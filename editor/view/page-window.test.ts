@@ -49,10 +49,15 @@ test('pagesToRender inside a gap or past the ends still gives the nearest page',
   assert.deepEqual(pagesToRender(mixed, 2000, 0, 0), { first: 2, last: 2 })
 })
 
-test('pagesToRender widens by overscan pages and clamps to the document', () => {
-  assert.deepEqual(pagesToRender(mixed, 1200, 100, 1), { first: 0, last: 2 })
-  assert.deepEqual(pagesToRender(mixed, 1200, 100, 5), { first: 0, last: 3 })
-  assert.deepEqual(pagesToRender(mixed, 0, 100, 2), { first: 0, last: 2 })
+test('pagesToRender widens the viewport by overscan pixels and clamps to the document', () => {
+  // viewport [1200, 1300) is inside page 1
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 0), { first: 1, last: 1 })
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 76), { first: 1, last: 1 }) // [1124, 1376): page 0 ends at 1123
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 78), { first: 0, last: 1 }) // [1122, 1378)
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 637), { first: 0, last: 1 }) // bottom 1937 touches page 2
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 638), { first: 0, last: 2 })
+  assert.deepEqual(pagesToRender(mixed, 1200, 100, 100_000), { first: 0, last: 3 })
+  assert.deepEqual(pagesToRender(mixed, 0, 100, -50), { first: 0, last: 0 })
 })
 
 test('pagesToRender follows zoom', () => {
@@ -61,8 +66,22 @@ test('pagesToRender follows zoom', () => {
   assert.deepEqual(pagesToRender(zoomed, 2300, 300, 0), { first: 1, last: 1 })
 })
 
-test('pagesToRender stays fast on a thousand pages', () => {
-  const big = pageLayout(Array.from({ length: 1000 }, (_, i) => (i % 7 === 0 ? landscape : portrait)), 1, 10)
-  const range = pagesToRender(big, big.tops[500] + 1, 400, 1)
-  assert.deepEqual(range, { first: 499, last: 501 })
+test('pagesToRender agrees with a linear scan on a thousand mixed pages', () => {
+  const big = pageLayout(Array.from({ length: 1000 }, (_, i) => (i % 7 === 0 ? landscape : portrait)), 1.3, 12)
+  let seed = 7
+  const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
+  for (let k = 0; k < 500; k++) {
+    const top = random() * big.total * 1.1 - big.total * 0.05
+    const height = random() * 3000
+    const overscan = random() * 2000
+    const lo = top - overscan
+    const hi = top + height + overscan
+    const hit = big.tops.map((t, i) => i).filter((i) => big.tops[i] + big.heights[i] > lo && big.tops[i] < hi)
+    const range = pagesToRender(big, top, height, overscan)
+    if (hit.length > 0) {
+      assert.deepEqual(range, { first: hit[0], last: hit[hit.length - 1] }, `top ${top} height ${height}`)
+    } else {
+      assert.equal(range.first, range.last)
+    }
+  }
 })

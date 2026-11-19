@@ -10,18 +10,36 @@ const SAMPLE = 64 * 1024
 type Entry = View & { seq: number }
 
 /**
- * SHA-256 hex of the length plus the first and last 64 KiB. Reading the whole file is not worth
- * it for a key: two different documents with the same length, head and tail are not expected.
+ * FNV-1a 64-bit over `bytes`, read forwards or backwards, with the 64-bit multiply done in two
+ * 32-bit halves (prime 2^40 + 0x1b3) so it needs no BigInt.
  */
-export async function documentKey(bytes: Uint8Array): Promise<string> {
+function fnv1a64(bytes: Uint8Array, hi: number, lo: number, backwards: boolean): string {
+  const n = bytes.length
+  for (let k = 0; k < n; k++) {
+    lo = (lo ^ bytes[backwards ? n - 1 - k : k]) >>> 0
+    const p = lo * 0x1b3 // < 2^41, exact
+    const carry = Math.floor(p / 0x100000000)
+    hi = (hi * 0x1b3 + carry + ((lo << 8) >>> 0)) >>> 0
+    lo = p >>> 0
+  }
+  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0')
+}
+
+/**
+ * A 128-bit hex key from the length plus the first and last 64 KiB: two FNV-1a 64 lanes, one
+ * read forwards and one backwards. Synchronous on purpose, so the viewer can find the
+ * remembered page inside the document callback and draw that page first. Not cryptographic;
+ * two different documents with the same length, head and tail are not expected.
+ */
+export function documentKey(bytes: Uint8Array): string {
   const head = bytes.subarray(0, Math.min(SAMPLE, bytes.length))
   const tail = bytes.subarray(Math.max(0, bytes.length - SAMPLE))
   const input = new Uint8Array(8 + head.length + tail.length)
   new DataView(input.buffer).setBigUint64(0, BigInt(bytes.length), true)
   input.set(head, 8)
   input.set(tail, 8 + head.length)
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
-  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
+  // FNV-1a 64 offset basis 0xcbf29ce484222325; the second lane uses a different basis.
+  return fnv1a64(input, 0xcbf29ce4, 0x84222325, false) + fnv1a64(input, 0x6c62272e, 0x07bb0142, true)
 }
 
 function isView(value: unknown): value is View {

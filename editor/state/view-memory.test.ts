@@ -34,25 +34,32 @@ const throwingStorage = new Proxy({} as Storage, {
   }
 })
 
-test('documentKey is a SHA-256 hex string that depends on the bytes', async () => {
+test('documentKey is a synchronous 128-bit hex string that depends on the bytes', () => {
   const a = new Uint8Array(200_000).map((_, i) => i % 251)
-  const key = await documentKey(a)
-  assert.match(key, /^[0-9a-f]{64}$/)
-  assert.equal(await documentKey(a.slice()), key)
+  const key = documentKey(a)
+  assert.equal(typeof key, 'string')
+  assert.match(key, /^[0-9a-f]{32}$/)
+  assert.equal(documentKey(a.slice()), key)
   const head = a.slice()
   head[0] ^= 1
   const tail = a.slice()
   tail[tail.length - 1] ^= 1
-  assert.notEqual(await documentKey(head), key)
-  assert.notEqual(await documentKey(tail), key)
-  assert.notEqual(await documentKey(a.slice(0, a.length - 1)), key)
+  const middleOfTail = a.slice()
+  middleOfTail[a.length - 40_000] ^= 0x80
+  assert.notEqual(documentKey(head), key)
+  assert.notEqual(documentKey(tail), key)
+  assert.notEqual(documentKey(middleOfTail), key)
+  assert.notEqual(documentKey(a.slice(0, a.length - 1)), key)
 })
 
-test('documentKey separates small files and covers the empty file', async () => {
-  const small = new Uint8Array([1, 2, 3])
-  const other = new Uint8Array([1, 2, 4])
-  assert.notEqual(await documentKey(small), await documentKey(other))
-  assert.match(await documentKey(new Uint8Array(0)), /^[0-9a-f]{64}$/)
+test('documentKey matches FNV-1a 64 and separates small files', () => {
+  // FNV-1a 64 of the 8-byte little-endian length 0 is the forward lane of the empty file's key
+  const zeros = new Uint8Array(8)
+  let h = 0xcbf29ce484222325n
+  for (const b of zeros) h = ((h ^ BigInt(b)) * 0x100000001b3n) & 0xffffffffffffffffn
+  assert.equal(documentKey(new Uint8Array(0)).slice(0, 16), h.toString(16).padStart(16, '0'))
+  assert.notEqual(documentKey(new Uint8Array([1, 2, 3])), documentKey(new Uint8Array([1, 2, 4])))
+  assert.notEqual(documentKey(new Uint8Array([1, 2, 3])), documentKey(new Uint8Array([3, 2, 1])))
 })
 
 test('saveView and loadView round-trip under the hwp-viewer:view: prefix', () => {

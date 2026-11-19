@@ -36,9 +36,11 @@ function firstIndex(length: number, pred: (i: number) => boolean): number {
 }
 
 /**
- * Pages to render for a viewport, widened by `overscan` pages on each side. Pages that only touch
- * the viewport edge are outside it. A viewport in a gap, of zero height or past either end still
- * gets the nearest page, so there is always something to draw. No pages: `{ first: 0, last: -1 }`.
+ * Pages to render for a viewport. `overscan` is in pixels (screen px, like the layout): the
+ * viewport is widened by that many pixels above and below before looking for pages. Pages that
+ * only touch the widened edge are outside it. A viewport in a gap, of zero height or past either
+ * end still gets the nearest page, so there is always something to draw.
+ * No pages: `{ first: 0, last: -1 }`.
  */
 export function pagesToRender(
   layout: PageLayout,
@@ -48,13 +50,12 @@ export function pagesToRender(
 ): PageRange {
   const count = layout.tops.length
   if (count === 0) return { first: 0, last: -1 }
-  const viewportBottom = viewportTop + Math.max(0, viewportHeight)
-  // first page whose bottom is below the viewport top
-  let first = firstIndex(count, (i) => layout.tops[i] + layout.heights[i] > viewportTop)
-  // last page whose top is above the viewport bottom
-  let last = firstIndex(count, (i) => layout.tops[i] >= viewportBottom) - 1
-  first = Math.min(first, count - 1)
-  if (last < first) last = first
-  const extra = Math.max(0, Math.floor(overscan))
-  return { first: Math.max(0, first - extra), last: Math.min(count - 1, last + extra) }
+  const extra = Math.max(0, overscan)
+  const top = viewportTop - extra
+  const bottom = viewportTop + Math.max(0, viewportHeight) + extra
+  // first page whose bottom is below the top edge
+  const first = Math.min(count - 1, firstIndex(count, (i) => layout.tops[i] + layout.heights[i] > top))
+  // last page whose top is above the bottom edge
+  const last = firstIndex(count, (i) => layout.tops[i] >= bottom) - 1
+  return { first, last: Math.max(first, last) }
 }

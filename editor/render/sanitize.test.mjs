@@ -61,18 +61,19 @@ test('<a> is unwrapped and its content kept', () => {
 
 test('<style> keeps only data: @font-face rules, moved to fontFaces; other rules warn', () => {
   const face = "@font-face{font-family:'A';src:url(data:font/woff2;base64,AAAA) format('woff2')}"
+  const rebuilt = '@font-face{font-family:"A";src:url("data:font/woff2;base64,AAAA") format("woff2")}'
   const r = clean(
     `<style>/* c */ ${face} @font-face{font-family:B;src:url(https://e.com/b.woff2)} ` +
       `text{fill:red} @import url(x.css);</style><style><![CDATA[${face}]]></style>`
   )
   assert.ok(!r.svg.includes('<style'))
-  assert.deepEqual(r.fontFaces, [face])
+  assert.deepEqual(r.fontFaces, [rebuilt])
   assert.ok(r.warnings.length >= 3, r.warnings.join('\n'))
 })
 
 test('@font-face decodes XML entities and refuses markup or CSS escapes', () => {
   const r = clean("<style>@font-face{font-family:&apos;A&apos;;src:url(data:font/ttf;base64,AA)}</style>")
-  assert.deepEqual(r.fontFaces, ["@font-face{font-family:'A';src:url(data:font/ttf;base64,AA)}"])
+  assert.deepEqual(r.fontFaces, ['@font-face{font-family:"A";src:url("data:font/ttf;base64,AA")}'])
   const bad = clean(
     '<style>@font-face{font-family:"&lt;/style&gt;";src:url(data:font/ttf;base64,AA)}' +
       '@font-face{font-family:A;src:\\75rl(https://e.com/a)}</style>'
@@ -82,7 +83,10 @@ test('@font-face decodes XML entities and refuses markup or CSS escapes', () => 
 
 test('identical @font-face rules are kept once', () => {
   const face = '@font-face{font-family:A;src:url(data:font/ttf;base64,AA)}'
-  assert.deepEqual(clean(`<style>${face}${face}</style><style>${face}</style>`).fontFaces, [face])
+  const same = "@font-face { font-family: 'A' ; src: URL( 'data:font/ttf;base64,AA' ) }"
+  assert.deepEqual(clean(`<style>${face}${face}</style><style>${same}</style>`).fontFaces, [
+    '@font-face{font-family:"A";src:url("data:font/ttf;base64,AA")}'
+  ])
 })
 
 test('markers and image colour filters that rhwp emits are kept and prefixed', () => {
@@ -113,11 +117,79 @@ test('ids and url(#…)/href="#…" references get the page prefix', () => {
   assert.ok(u.svg.includes('fill="url(#p0-g1)"'))
 })
 
-test('entities stay as they are and single-quoted values are re-quoted safely', () => {
+test('attribute values are decoded and re-escaped; text entities stay as they are', () => {
   const r = clean(`<text font-family="&apos;함초롬바탕&apos;,serif" x='1"2'>&lt;&amp;&#44032;</text>`)
-  assert.ok(r.svg.includes('font-family="&apos;함초롬바탕&apos;,serif"'))
+  assert.ok(r.svg.includes(`font-family="'함초롬바탕',serif"`))
   assert.ok(r.svg.includes('x="1&quot;2"'))
   assert.ok(r.svg.includes('>&lt;&amp;&#44032;</text>'))
+})
+
+test('url() is judged after entity decoding, case-insensitively, with any quoting', () => {
+  // equivalent spellings of a local reference are all kept and prefixed
+  for (const fill of ['URL(#g)', 'url(&quot;#g&quot;)', "url( '#g' )", 'Url(&#x27;#g&#x27;)', 'url(&#35;g)', 'url(\t#g\n)']) {
+    const r = clean(`<linearGradient id="g"/><rect fill="${fill}"/>`)
+    assert.ok(r.svg.includes('<rect fill="url(#p0-g)"/>'), `${fill} -> ${r.svg}`)
+    assert.deepEqual(r.warnings, [], fill)
+  }
+  // every spelling of an outside reference is removed
+  for (const fill of [
+    'URL(https://e.com/a)',
+    'url(&quot;https://e.com/a&quot;)',
+    '&#117;rl(https://e.com/a)',
+    '&#x55;RL(https://e.com/a)',
+    'url&#40;https://e.com/a)',
+    'url(&#104;ttps://e.com/a)',
+    'url( //e.com/a )',
+    'url(data:image/svg+xml;base64,AA)',
+    'u\\72l(https://e.com/a)',
+    'image(https://e.com/a)',
+    'url(#g) url(https://e.com/a)'
+  ]) {
+    const r = clean(`<rect fill="${fill}" width="1"/>`)
+    assert.ok(r.svg.includes('<rect width="1"/>'), `${fill} -> ${r.svg}`)
+    assert.equal(r.warnings.length, 1, fill)
+  }
+})
+
+test('href is judged after entity decoding and whitespace trimming', () => {
+  assert.ok(clean('<use href="&#35;g"/>').svg.includes('<use href="#p0-g"/>'))
+  assert.ok(clean('<use xlink:href=" #g "/>').svg.includes('<use xlink:href="#p0-g"/>'))
+  assert.ok(clean('<image href="&#100;ata:image/png;base64,AA"/>').svg.includes('<image href="data:image/png;base64,AA"/>'))
+  for (const href of ['&#106;avascript:x', ' JAVASCRIPT:x', 'java&#x09;script:x', '&#x23;g&quot; onload=&quot;x', 'https://e.com/a']) {
+    const r = clean(`<image href="${href}" width="1"/>`)
+    assert.ok(r.svg.includes('<image width="1"/>'), `${href} -> ${r.svg}`)
+  }
+})
+
+test('ids and references with markup characters are escaped, not broken out of', () => {
+  const r = clean('<linearGradient id="a&amp;b&quot;c"/><rect fill="url(&quot;#a&amp;b&quot;)"/>')
+  assert.ok(r.svg.includes('id="p0-a&amp;b&quot;c"'), r.svg)
+  assert.ok(r.svg.includes('fill="url(#p0-a&amp;b)"'), r.svg)
+})
+
+test('@font-face src must be data: fonts only; mixed sources are refused', () => {
+  for (const src of [
+    'url(data:font/ttf;base64,AA),local(Fixture)',
+    'local(Fixture),url(data:font/ttf;base64,AA)',
+    'url(data:font/ttf;base64,AA),url(https://e.com/a.woff2)',
+    'url(data:font/ttf;base64,AA) format(woff2),URL(&quot;//e.com/a&quot;)',
+    'url(data:text/html;base64,AA)',
+    'url(data:font/ttf;base64,AA) tech(color-COLRv1)'
+  ]) {
+    const r = clean(`<style>@font-face{font-family:A;src:${src}}</style>`)
+    assert.deepEqual(r.fontFaces, [], src)
+    assert.equal(r.warnings.length, 1, src)
+  }
+  const extra = clean('<style>@font-face{font-family:A;src:url(data:font/ttf;base64,AA);background:url(https://e.com)}</style>')
+  assert.deepEqual(extra.fontFaces, [])
+  const kept = clean(
+    '<style>@font-face{font-family:"Noto Serif KR";font-weight:700;font-style:normal;unicode-range:U+AC00-D7A3;' +
+      "src:url('data:font/woff2;base64,AA') format('woff2'),url(data:font/ttf;base64,BB)}</style>"
+  )
+  assert.deepEqual(kept.fontFaces, [
+    '@font-face{font-family:"Noto Serif KR";font-weight:700;font-style:normal;unicode-range:U+AC00-D7A3;' +
+      'src:url("data:font/woff2;base64,AA") format("woff2"),url("data:font/ttf;base64,BB")}'
+  ])
 })
 
 test('comments, processing instructions and CDATA are handled', () => {

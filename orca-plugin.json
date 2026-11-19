@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "hwp-viewer",
+  "name": "HWP Viewer",
+  "version": "0.1.0",
+  "description": "Opens Hangul word processor documents (.hwpx and .hwp) for reading inside Orca. Early scaffold: it shows the file type and size, not the document yet.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "sandboxed-ui",
+  "pluginApi": 1,
+  "contributes": {
+    "customEditors": [
+      {
+        "id": "hwp-viewer",
+        "title": "HWP Viewer",
+        "extensions": [
+          ".hwpx",
+          ".hwp"
+        ],
+        "entry": "editor/main.ts",
+        "frame": "isolated",
+        "priority": "default",
+        "contentKind": "bytes"
+      }
+    ]
+  },
+  "license": "MIT"
+}

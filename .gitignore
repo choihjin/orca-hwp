@@ -1,0 +1,7 @@
+node_modules/
+.orca/
+.DS_Store
+
+# 1단계 시험판과 공개 표본은 커밋하지 않는다
+spike/
+fixtures/

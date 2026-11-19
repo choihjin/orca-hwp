@@ -24,6 +24,55 @@ export type Controller = {
   dispose(): void
 }
 
+/** Elements that put ink on the page. A page-sized white `<rect>` is the paper, not ink. */
+const INK = /<(image|path|line|polyline|polygon|circle|ellipse|use|rect)\b([^>]*)>/g
+
+function attr(tag: string, name: string): string | null {
+  return new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`).exec(tag)?.[1] ?? null
+}
+
+function isPaper(tagAttrs: string, width: number, height: number): boolean {
+  const num = (name: string, fallback: number) => {
+    const v = attr(tagAttrs, name)
+    return v === null ? fallback : parseFloat(v)
+  }
+  const fill = (attr(tagAttrs, 'fill') ?? '#ffffff').trim().toLowerCase()
+  return (
+    Math.abs(num('x', 0)) < 0.5 &&
+    Math.abs(num('y', 0)) < 0.5 &&
+    Math.abs(num('width', -1) - width) < 0.5 &&
+    Math.abs(num('height', -1) - height) < 0.5 &&
+    ['#fff', '#ffffff', 'white', 'none'].includes(fill)
+  )
+}
+
+/**
+ * True when page `i` shows nothing: no text run with visible characters and, outside `<defs>`,
+ * no text content and no drawing element other than the white page background. Design: a
+ * document with no pages or only an empty body gets a notice, not a blank sheet.
+ */
+export function isBlankPage(doc: EngineDocument, i: number): boolean {
+  try {
+    if (doc.pageTextRuns(i).some((run) => run.text.trim() !== '')) {
+      return false
+    }
+    const svg = doc.renderPageSvg(i).replace(/<defs\b[\s\S]*?<\/defs>/g, '')
+    const rootTag = /<svg\b[^>]*>/.exec(svg)?.[0] ?? ''
+    const width = parseFloat(attr(rootTag, 'width') ?? 'NaN')
+    const height = parseFloat(attr(rootTag, 'height') ?? 'NaN')
+    for (const m of svg.matchAll(INK)) {
+      if (!(m[1] === 'rect' && isPaper(m[2], width, height))) {
+        return false
+      }
+    }
+    // Character data left once tags are gone is text drawn on the page.
+    return svg.replace(/<[^>]*>/g, '').trim() === ''
+  } catch {
+    // Let the view try and report the page itself.
+    return false
+  }
+}
+
 const ENGINE_CODES: readonly string[] = ['not-hangul', 'encrypted', 'corrupt', 'unsupported', 'engine']
 
 export function createController(deps: {
@@ -79,7 +128,7 @@ export function createController(deps: {
         view.showError(code, message)
         return
       }
-      if (doc.pageCount <= 0) {
+      if (doc.pageCount <= 0 || (doc.pageCount === 1 && isBlankPage(doc, 0))) {
         doc.dispose()
         view.showError('empty')
         return

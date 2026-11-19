@@ -64,6 +64,13 @@ export function createViewer(options: {
   const failed = new Set<number>()
   let current = 0
   let typed = ''
+  /**
+   * A page chosen explicitly (opening, End, a typed number) stays current while the scroll
+   * position is the one we set. Near the end the scroll top is capped, so the chosen page may
+   * not reach the top of the screen and the line test in `pageAtScroll` would pick an earlier
+   * page; only a real scroll away from `pinTop` hands control back to it.
+   */
+  let pin: { page: number; top: number } | null = null
   let tickTimer: ReturnType<typeof setTimeout> | null = null
 
   const observer =
@@ -166,6 +173,27 @@ export function createViewer(options: {
       const p = Math.min(Math.max(anchor.page, 0), slots.length - 1)
       container.scrollTop = Math.max(0, layout.tops[p] + anchor.fraction * layout.heights[p])
       container.scrollLeft = Math.max(0, (contentWidth - viewportWidth()) / 2)
+      if (pin) {
+        // Read back: the browser caps scrollTop at the bottom of the content.
+        pin.top = container.scrollTop
+      }
+    }
+  }
+
+  /** Pins `page` as current and scrolls it to the top of the screen, as far as scrolling allows. */
+  function showPageAtTop(page: number): void {
+    pin = { page, top: 0 }
+    current = page
+    relayout({ page, fraction: 0 })
+    drawVisible()
+  }
+
+  /** Draws, in this task, every page the screen shows at the actual (capped) scroll top. */
+  function drawVisible(): void {
+    drawPage(current)
+    const { first, last } = pagesToRender(layout, container.scrollTop - GAP, container.clientHeight, 0)
+    for (let i = first; i <= last; i++) {
+      drawPage(i)
     }
   }
 
@@ -240,6 +268,14 @@ export function createViewer(options: {
     if (!doc) {
       return
     }
+    if (pin) {
+      if (Math.abs(container.scrollTop - pin.top) < 1) {
+        // Our own scroll (or none): the chosen page stays current.
+        schedule()
+        return
+      }
+      pin = null
+    }
     const page = pageAtScroll()
     if (page !== current) {
       current = page
@@ -286,6 +322,7 @@ export function createViewer(options: {
     drawn.clear()
     failed.clear()
     current = 0
+    pin = null
     zoom = 1
     typed = ''
     layout = { tops: [], heights: [], total: 0 }
@@ -300,9 +337,7 @@ export function createViewer(options: {
       return
     }
     const p = Math.min(Math.max(page, 0), doc.pageCount - 1)
-    drawPage(p)
-    current = p
-    relayout({ page: p, fraction: 0 })
+    showPageAtTop(p)
     paintStatus()
     onViewChange({ page: current, zoom })
     schedule()
@@ -360,13 +395,9 @@ export function createViewer(options: {
       }
       const start = Math.min(Math.max(startPage, 0), next.pageCount - 1)
       setRenderState('loading')
-      relayout({ page: start, fraction: 0 })
-      // Drawn in this task, so the first paint after the document arrives shows them (design 5.3).
-      drawPage(start)
-      if (start + 1 < next.pageCount) {
-        drawPage(start + 1)
-      }
-      current = start
+      // Drawn in this task, so the first paint after the document arrives shows every page on
+      // screen, the start page included even when the scroll cap keeps it low (design 5.3).
+      showPageAtTop(start)
       paintStatus()
       schedule()
     },

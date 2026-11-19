@@ -71,3 +71,22 @@ for source in Path("editor/fonts").glob("*.woff2"):
         suffix = ".otf" if font.sfntVersion == "OTTO" else ".ttf"
         font.save(out / source.with_suffix(suffix).name, reorderTables=False)
 ```
+
+## 서드파티 고지
+
+`npm run notices`는 고정한 상류 파일과 배포 폴더에 있는 라이선스 원문을
+`build/licenses/`의 검토본과 대조한다. 줄바꿈을 LF로 맞춘 뒤 내용이
+다르면 고지 파일을 쓰기 전에 실패한다. Rust 크레이트 원본은
+`CARGO_HOME`(기본 `~/.cargo`)의 캐시를 먼저 읽고, 없으면 crates.io에서
+받는다. 원본 아카이브는 `Cargo.lock`의 SHA-256으로 검증한다.
+
+`build/licenses/crates.json`은 rhwp v0.8.7의 WASM 타깃 normal 그래프를
+고정한다. 확인한 항목은 총 131개로, rhwp 자체와 같은 작업공간의 크레이트
+3개, crates.io 크레이트 127개다. 같은 작업공간의 크레이트에는 상류
+저장소의 MIT 전문을 적용했다. 목록을 갱신할 때는 고정한 상류 커밋에서
+다음 명령을 실행하고 출력의 중복 노드를 제거한다.
+
+```sh
+cargo tree -p rhwp --locked --target wasm32-unknown-unknown -e normal,no-proc-macro --prefix none -f '{p}|{l}'
+cargo fetch --locked --target wasm32-unknown-unknown
+```

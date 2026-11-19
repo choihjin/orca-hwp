@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ENGINE_INFO, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
+import { cropPng } from './crop-png.mjs'
 import { prepareFonts } from './font-loader.js'
 import { textLines } from './text-lines.js'
 
@@ -76,30 +77,30 @@ function readOptions(args) {
   }
 }
 
-function prepareSvg(svg, pageSize, region, scale) {
-  const { width, height } = region ?? pageSize
+function scaledDimensions({ width, height }, scale) {
   const pixelWidth = Math.max(1, Math.round(width * scale))
   const pixelHeight = Math.max(1, Math.round(height * scale))
   if (![pixelWidth, pixelHeight].every(Number.isSafeInteger)) {
     throw new CliError('invalid-argument', 'Scaled PNG dimensions are too large')
   }
+  return { width: pixelWidth, height: pixelHeight }
+}
 
+function prepareSvg(svg, { width, height }) {
   const root = /<svg(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/.exec(svg)
   if (!root) throw new CliError('render-failed', 'The page SVG has no root element')
   const attributes = root[0].slice(4, -1).replace(
     /\s+([^\s=]+)\s*=\s*(?:"[^"]*"|'[^']*')/g,
     (attribute, name) => {
-      if (name === 'width' || name === 'height' || name === 'preserveAspectRatio' ||
-          (region && name === 'viewBox')) return ''
+      if (name === 'width' || name === 'height' || name === 'preserveAspectRatio') return ''
       return attribute
     }
   )
-  const viewBox = region ? ` viewBox="${region.x} ${region.y} ${width} ${height}"` : ''
-  const viewport = `width="${pixelWidth}" height="${pixelHeight}" preserveAspectRatio="none"`
-  return svg.replace(root[0], `<svg${attributes} ${viewport}${viewBox}>`)
+  const viewport = `width="${width}" height="${height}" preserveAspectRatio="none"`
+  return svg.replace(root[0], `<svg${attributes} ${viewport}>`)
 }
 
-async function renderPng(svg, fontBuffers) {
+async function renderPng(svg, fontBuffers, crop) {
   const { initWasm, Resvg } = await import('./vendor/resvg/index.mjs')
   await initWasm(readFileSync(resvgWasm))
   const renderer = new Resvg(svg, {
@@ -112,14 +113,16 @@ async function renderPng(svg, fontBuffers) {
       monospaceFamily: 'D2Coding'
     }
   })
+  // A WASM trap can leave the renderer borrowed. Freeing it after a trap masks the
+  // original error, so release the objects only after the WASM calls succeed.
+  const image = renderer.render()
+  const rendered = crop
+    ? { pixels: image.pixels, width: image.width, height: image.height }
+    : image.asPng()
   try {
-    const image = renderer.render()
-    try {
-      return image.asPng()
-    } finally {
-      image.free()
-    }
+    return crop ? cropPng(rendered, crop) : rendered
   } finally {
+    image.free()
     renderer.free()
   }
 }
@@ -137,10 +140,17 @@ async function renderPage(options) {
     const pageSize = doc.pageSize(index)
     const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
     const warnings = [...result.warnings]
-    const svg = prepareSvg(result.svg, pageSize, region, scale)
+    const crop = region && {
+      x: Math.round(region.x * scale),
+      y: Math.round(region.y * scale),
+      ...scaledDimensions(region, scale)
+    }
+    // Moving the SVG viewBox can trap inside resvg. Use the same viewport as a
+    // whole-page render and crop its pixels afterwards.
+    const svg = prepareSvg(result.svg, scaledDimensions(pageSize, scale))
     const fonts = await prepareFonts(svg, bundledFontsOnly, warnings)
     const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
-    const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers)
+    const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, crop)
     const png = options.out
       ? resolve(options.out)
       : join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)

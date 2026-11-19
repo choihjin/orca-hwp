@@ -35,7 +35,6 @@ export function createController(deps: {
 }): Controller {
   const { engine, view, storage } = deps
   const saveDelayMs = deps.saveDelayMs ?? 500
-  let generation = 0
   let current: EngineDocument | null = null
   let key: string | null = null
   let pending: ViewState | null = null
@@ -63,8 +62,8 @@ export function createController(deps: {
   }
 
   return {
+    // Synchronous inside; the Promise is the interface the plan fixed.
     async load(bytes) {
-      const mine = ++generation
       if (current) {
         // Drop the view's hold on the old document before it is freed.
         view.clear()
@@ -86,31 +85,21 @@ export function createController(deps: {
         return
       }
       current = doc
-      // Shown before anything is awaited: an `orca plugin shot` taken on the first paint after
-      // the document arrives must already see a page (design 5.3). The remembered page needs an
-      // async hash, so it follows as a second call.
-      view.showDocument(doc, 0)
-
-      let docKey: string
+      // Everything up to the first draw is synchronous: an `orca plugin shot` taken on the first
+      // paint after the document arrives must already see the remembered page (design 5.3).
+      let page = 0
+      let zoom: number | undefined
       try {
-        docKey = await documentKey(bytes)
-      } catch {
-        return
+        key = documentKey(bytes)
+        const saved = loadView(storage, key)
+        if (saved) {
+          page = Number.isInteger(saved.page) && saved.page >= 0 && saved.page < doc.pageCount ? saved.page : 0
+          zoom = Number.isFinite(saved.zoom) && saved.zoom > 0 ? saved.zoom : undefined
+        }
+      } catch (error) {
+        console.warn(`[hwp-viewer] remembered view unavailable: ${String(error)}`)
       }
-      if (mine !== generation) {
-        return
-      }
-      key = docKey
-      const saved = loadView(storage, docKey)
-      if (!saved) {
-        return
-      }
-      const page =
-        Number.isInteger(saved.page) && saved.page >= 0 && saved.page < doc.pageCount ? saved.page : 0
-      const zoom = Number.isFinite(saved.zoom) && saved.zoom > 0 ? saved.zoom : 1
-      if (page !== 0 || zoom !== 1) {
-        view.showDocument(doc, page, zoom)
-      }
+      view.showDocument(doc, page, zoom ?? 1)
     },
     remember(state) {
       if (!current) {
@@ -123,7 +112,6 @@ export function createController(deps: {
       timer = setTimeout(flush, saveDelayMs)
     },
     dispose() {
-      generation++
       release()
       view.clear()
     }

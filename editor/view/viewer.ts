@@ -7,10 +7,11 @@ import { renderError } from './errors'
 import { pageLayout, pagesToRender } from './page-window'
 import type { StatusBar } from './status-bar'
 
-/** Space between pages and around them, in CSS px. */
+/** Space between pages and around them, in CSS px. pageLayout starts the first page at 0, so
+ *  the content is offset by one GAP at the top and padded by one at the bottom. */
 const GAP = 16
-/** Extra pages drawn above and below the screen. */
-const OVERSCAN = 1
+/** Extra height drawn above and below the screen, in screens (pagesToRender takes pixels). */
+const OVERSCAN_SCREENS = 1
 /** Drawn pages this far outside the drawn range are dropped from the DOM. */
 const KEEP = 2
 /** Pages drawn per task while filling the screen, so scrolling stays responsive. */
@@ -152,18 +153,18 @@ export function createViewer(options: {
     layout = pageLayout(sizes, scale, GAP)
     const contentWidth = Math.max(viewportWidth(), maxWidth * scale + 2 * GAP)
     pagesEl.style.width = `${contentWidth}px`
-    pagesEl.style.height = `${layout.total}px`
+    pagesEl.style.height = `${layout.total + 2 * GAP}px`
     for (let i = 0; i < slots.length; i++) {
       const w = sizes[i].width * scale
       const s = slots[i].style
-      s.top = `${layout.tops[i]}px`
+      s.top = `${layout.tops[i] + GAP}px`
       s.height = `${layout.heights[i]}px`
       s.width = `${w}px`
       s.left = `${(contentWidth - w) / 2}px`
     }
     if (anchor) {
       const p = Math.min(Math.max(anchor.page, 0), slots.length - 1)
-      container.scrollTop = Math.max(0, layout.tops[p] - GAP + anchor.fraction * layout.heights[p])
+      container.scrollTop = Math.max(0, layout.tops[p] + anchor.fraction * layout.heights[p])
       container.scrollLeft = Math.max(0, (contentWidth - viewportWidth()) / 2)
     }
   }
@@ -173,7 +174,7 @@ export function createViewer(options: {
       return { page: 0, fraction: 0 }
     }
     const h = layout.heights[current] || 1
-    return { page: current, fraction: (container.scrollTop + GAP - layout.tops[current]) / h }
+    return { page: current, fraction: (container.scrollTop - layout.tops[current]) / h }
   }
 
   /** The page under the line a third of the way down the screen. */
@@ -182,7 +183,7 @@ export function createViewer(options: {
     if (!tops.length) {
       return 0
     }
-    const line = container.scrollTop + container.clientHeight / 3
+    const line = container.scrollTop - GAP + container.clientHeight / 3
     let lo = 0
     let hi = tops.length - 1
     while (lo < hi) {
@@ -208,7 +209,8 @@ export function createViewer(options: {
     if (!doc) {
       return
     }
-    const { first, last } = pagesToRender(layout, container.scrollTop, container.clientHeight, OVERSCAN)
+    const height = container.clientHeight
+    const { first, last } = pagesToRender(layout, container.scrollTop - GAP, height, height * OVERSCAN_SCREENS)
     const order: number[] = []
     for (let i = first; i <= last; i++) {
       if (!drawn.has(i)) {

@@ -70,12 +70,19 @@ const BAD_AMPERSAND = /&(?!(?:#[0-9]+|#x[0-9a-fA-F]+|lt|gt|amp|quot|apos);)/
 const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]*))\s*\)/gi
 /** What may follow `#` in a reference we write back. */
 const FRAGMENT = /^[^\s"'<>()\\]+$/
-/** CSS functions an allowed attribute may contain: transforms and colours, nothing that loads. */
+/**
+ * CSS functions an allowed attribute may contain: transforms, colours and arithmetic, nothing
+ * that loads or reads other values (`url`, `image`, `var`, `attr`, `env` stay out).
+ */
 const SAFE_FUNCTIONS = new Set(
-  'matrix translate translatex translatey scale scalex scaley rotate skewx skewy rgb rgba hsl hsla'.split(' ')
+  (
+    'matrix translate translatex translatey scale scalex scaley rotate skewx skewy ' +
+    'rgb rgba hsl hsla calc min max clamp'
+  ).split(' ')
 )
 const CLASS_VALUE = /^[\w\s-]*$/
 const PLAIN_VALUE = /^[\w\s.,#%+-]*$/
+const SPECIAL_ATTRIBUTES = new Set(['id', 'class', 'href', 'xlink:href'])
 const DATA_IMAGE = /^data:image\/[^\s"'<>\\]*$/i
 const DATA_FONT =
   /^data:(?:font\/[\w.+-]+|application\/(?:font-woff2?|font-sfnt|x-font-[\w.+-]+|vnd\.ms-fontobject|octet-stream))(?:;[\w.+-]+=[\w.+-]+)*(?:;base64)?,[A-Za-z0-9+/=%._~-]*$/i
@@ -122,7 +129,9 @@ function splitTopLevel(s, separator) {
   let start = 0
   for (let i = 0; i < s.length; i++) {
     const c = s[i]
-    if (quote) {
+    if (c === '\\') {
+      i++ // an escaped character never separates or quotes
+    } else if (quote) {
       if (c === quote) quote = null
     } else if (c === '"' || c === "'") quote = c
     else if (c === '(') depth++
@@ -139,13 +148,89 @@ function splitTopLevel(s, separator) {
 const FONT_SOURCE =
   /^url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]*))\s*\)(?:\s+format\(\s*(?:"([\w.-]+)"|'([\w.-]+)'|([\w.-]+))\s*\))?$/i
 
+const FEATURE_TAG = String.raw`(?:"[\x20-\x7e]{4}"|'[\x20-\x7e]{4}')`
+const PERCENT = String.raw`\d+(?:\.\d+)?%`
+
 /** @type {Record<string, RegExp>} */
 const FONT_DESCRIPTORS = {
+  'font-feature-settings': new RegExp(
+    String.raw`^(?:normal|${FEATURE_TAG}(?:\s+(?:\d+|on|off))?(?:\s*,\s*${FEATURE_TAG}(?:\s+(?:\d+|on|off))?)*)$`,
+    'i'
+  ),
+  'font-variation-settings': new RegExp(
+    String.raw`^(?:normal|${FEATURE_TAG}\s+-?\d+(?:\.\d+)?(?:\s*,\s*${FEATURE_TAG}\s+-?\d+(?:\.\d+)?)*)$`,
+    'i'
+  ),
+  'font-variant': /^[a-z-]+(?:\s+[a-z-]+)*$/i,
+  'ascent-override': new RegExp(String.raw`^(?:normal|${PERCENT})$`, 'i'),
+  'descent-override': new RegExp(String.raw`^(?:normal|${PERCENT})$`, 'i'),
+  'line-gap-override': new RegExp(String.raw`^(?:normal|${PERCENT})$`, 'i'),
+  'size-adjust': new RegExp(String.raw`^${PERCENT}$`, 'i'),
   'font-weight': /^(?:normal|bold|bolder|lighter|\d{1,4})(?:\s+\d{1,4})?$/i,
   'font-style': /^(?:normal|italic|oblique)(?:\s+-?\d+(?:\.\d+)?deg){0,2}$/i,
   'font-stretch': /^(?:[a-z-]+|\d+(?:\.\d+)?%)(?:\s+\d+(?:\.\d+)?%)?$/i,
   'font-display': /^(?:auto|block|swap|fallback|optional)$/i,
   'unicode-range': /^u\+[0-9a-f?]{1,6}(?:-[0-9a-f]{1,6})?(?:\s*,\s*u\+[0-9a-f?]{1,6}(?:-[0-9a-f]{1,6})?)*$/i
+}
+
+/**
+ * Reads a CSS string token that is the whole of `value`, decoding its escapes.
+ * @param {string} value
+ * @returns {string | null}
+ */
+function cssString(value) {
+  const quote = value[0]
+  if (quote !== '"' && quote !== "'") return null
+  let out = ''
+  let i = 1
+  for (; i < value.length; i++) {
+    const c = value[i]
+    if (c === quote) break
+    if (c === '\n' || c === '\r' || c === '\f') return null // unterminated string in CSS
+    if (c !== '\\') {
+      out += c
+      continue
+    }
+    const next = value[i + 1]
+    if (next === undefined) return null
+    if (next === '\n' || next === '\f') {
+      i++ // escaped newline continues the string
+      continue
+    }
+    const hex = /^[0-9a-fA-F]{1,6}/.exec(value.slice(i + 1, i + 7))
+    if (hex) {
+      const code = parseInt(hex[0], 16)
+      const valid = code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+      out += valid ? String.fromCodePoint(code) : '\ufffd'
+      i += hex[0].length
+      if (/[ \t\n]/.test(value[i + 1] ?? '')) i++
+    } else {
+      out += next
+      i++
+    }
+  }
+  if (i >= value.length || value.slice(i + 1).trim() !== '') return null
+  return out
+}
+
+/**
+ * A family name from a `font-family` descriptor: one quoted string, or identifiers separated by
+ * spaces. Returns null for anything else (lists, functions, escapes outside a string).
+ * @param {string} value
+ */
+function fontFamilyName(value) {
+  const name = value[0] === '"' || value[0] === "'" ? cssString(value) : /^-?[A-Za-z_\u0080-\uffff][\w\u0080-\uffff-]*(?:\s+-?[A-Za-z_\u0080-\uffff][\w\u0080-\uffff-]*)*$/.test(value) ? value.replace(/\s+/g, ' ') : null
+  if (name === null || name.trim() === '' || /[\u0000-\u001f\u007f]/.test(name)) return null
+  return name
+}
+
+/**
+ * Writes `name` as a double-quoted CSS string. `<` and `>` become CSS escapes so the rule can sit
+ * inside a <style> element without ending it.
+ * @param {string} name
+ */
+function quoteCss(name) {
+  return `"${name.replace(/[\\"]/g, (c) => `\\${c}`).replace(/</g, '\\3c ').replace(/>/g, '\\3e ')}"`
 }
 
 /**
@@ -156,7 +241,8 @@ const FONT_DESCRIPTORS = {
  * @returns {{ rule: string } | { reason: string }}
  */
 function rebuildFontFace(body) {
-  if (/[\\<>]/.test(body)) return { reason: 'CSS escape or markup character' }
+  // Every value written back is either rebuilt (family name, src) or matched in full by a
+  // pattern without backslashes or markup characters (the other descriptors).
   /** @type {string[]} */
   const out = []
   let family = false
@@ -168,10 +254,9 @@ function rebuildFontFace(body) {
     const property = declaration.slice(0, colon).trim().toLowerCase()
     const value = declaration.slice(colon + 1).trim()
     if (property === 'font-family') {
-      const m = /^(?:"([^"]*)"|'([^']*)'|([^"'(){};,]+))$/.exec(value)
-      const name = m ? (m[1] ?? m[2] ?? m[3]).trim() : ''
-      if (!name || /["'(){};,]/.test(name)) return { reason: `font-family ${value.slice(0, 30)}` }
-      out.push(`font-family:"${name}"`)
+      const name = fontFamilyName(value)
+      if (name === null) return { reason: `font-family ${value.slice(0, 30)}` }
+      out.push(`font-family:${quoteCss(name)}`)
       family = true
     } else if (property === 'src') {
       /** @type {string[]} */
@@ -327,7 +412,6 @@ export function sanitizeSvg(svg, prefix) {
     if (
       outside ||
       functions.some((f) => !SAFE_FUNCTIONS.has(f)) ||
-      /\(/.test(unquoted.replace(/[A-Za-z_-][\w-]*\s*\(/g, '')) ||
       /javascript:/i.test(value.replace(/[\u0000-\u0020]/g, ''))
     ) {
       warn(`removed ${name} that points outside the page`)
@@ -347,7 +431,8 @@ export function sanitizeSvg(svg, prefix) {
    */
   const attributeValue = (element, name, raw) => {
     // numbers, colours, keywords: no "(", ":", quote, "&" or "<", so no url() or scheme possible
-    if (PLAIN_VALUE.test(raw) && ALLOWED_ATTRIBUTES.has(name) && name !== 'id' && name !== 'href' && name !== 'xlink:href') {
+    // class, id and href have their own rules: they always go through judgeAttribute
+    if (PLAIN_VALUE.test(raw) && ALLOWED_ATTRIBUTES.has(name) && !SPECIAL_ATTRIBUTES.has(name)) {
       return raw
     }
     if (name === 'id' || raw.length > 4096) return judgeAttribute(element, name, raw)

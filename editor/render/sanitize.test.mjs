@@ -71,13 +71,12 @@ test('<style> keeps only data: @font-face rules, moved to fontFaces; other rules
   assert.ok(r.warnings.length >= 3, r.warnings.join('\n'))
 })
 
-test('@font-face decodes XML entities and refuses markup or CSS escapes', () => {
+test('@font-face decodes XML entities, escapes markup in names and refuses CSS escapes in src', () => {
   const r = clean("<style>@font-face{font-family:&apos;A&apos;;src:url(data:font/ttf;base64,AA)}</style>")
   assert.deepEqual(r.fontFaces, ['@font-face{font-family:"A";src:url("data:font/ttf;base64,AA")}'])
-  const bad = clean(
-    '<style>@font-face{font-family:"&lt;/style&gt;";src:url(data:font/ttf;base64,AA)}' +
-      '@font-face{font-family:A;src:\\75rl(https://e.com/a)}</style>'
-  )
+  const markup = clean('<style>@font-face{font-family:"&lt;/style&gt;";src:url(data:font/ttf;base64,AA)}</style>')
+  assert.deepEqual(markup.fontFaces, ['@font-face{font-family:"\\3c /style\\3e ";src:url("data:font/ttf;base64,AA")}'])
+  const bad = clean('<style>@font-face{font-family:A;src:\\75rl(https://e.com/a)}</style>')
   assert.deepEqual(bad.fontFaces, [])
 })
 
@@ -190,6 +189,72 @@ test('@font-face src must be data: fonts only; mixed sources are refused', () =>
     '@font-face{font-family:"Noto Serif KR";font-weight:700;font-style:normal;unicode-range:U+AC00-D7A3;' +
       'src:url("data:font/woff2;base64,AA") format("woff2"),url("data:font/ttf;base64,BB")}'
   ])
+})
+
+test('safe CSS math functions in presentation attributes are kept', () => {
+  for (const [attr, value] of [
+    ['width', 'calc(25% + 2px)'],
+    ['height', 'calc((100% - 4px) / 2)'],
+    ['x', 'min(10px, 5%)'],
+    ['stroke-width', 'clamp(1px, 0.5%, 3px)'],
+    ['transform', 'translate(calc(10px + 1%), 0) rotate(45)']
+  ]) {
+    const r = clean(`<rect ${attr}="${value}"/>`)
+    assert.ok(r.svg.includes(`<rect ${attr}="${value}"/>`), `${attr}=${value} -> ${r.svg}`)
+    assert.deepEqual(r.warnings, [], value)
+  }
+  // a math function does not open a way to load anything
+  for (const value of ['calc(url(https://e.com/a))', 'calc(1px + image(https://e.com/a))', 'min(var(--x), 1px)']) {
+    assert.ok(clean(`<rect width="${value}" height="1"/>`).svg.includes('<rect height="1"/>'), value)
+  }
+})
+
+test('@font-face family names are re-quoted and escaped, not refused', () => {
+  const face = (/** @type {string} */ family) => clean(`<style>@font-face{font-family:${family};src:url(data:font/ttf;base64,AA)}</style>`)
+  const rule = (/** @type {string} */ name) => `@font-face{font-family:"${name}";src:url("data:font/ttf;base64,AA")}`
+  assert.deepEqual(face(`"D'Angelo"`).fontFaces, [rule("D'Angelo")])
+  assert.deepEqual(face(`'Font (Body)'`).fontFaces, [rule('Font (Body)')])
+  assert.deepEqual(face('Noto Serif KR').fontFaces, [rule('Noto Serif KR')])
+  assert.deepEqual(face('"함초롬바탕; 확장"').fontFaces, [rule('함초롬바탕; 확장')])
+  // CSS escapes in the string are decoded, then written back escaped
+  assert.deepEqual(face(String.raw`"A\"B\\C\27 D"`).fontFaces, [rule(String.raw`A\"B\\C'D`)])
+  // markup in a family name cannot close the stylesheet it is written into
+  const markup = face('"&lt;/style&gt;&lt;script&gt;"').fontFaces
+  assert.equal(markup.length, 1)
+  assert.ok(!/[<>]/.test(markup[0]), markup[0])
+  assert.ok(markup[0].includes(String.raw`font-family:"\3c /style\3e \3c script\3e "`), markup[0])
+  // still refused: no name, two names, a function in an unquoted name
+  for (const family of ['""', 'A, B', 'A(B)', '"A" B']) assert.deepEqual(face(family).fontFaces, [], family)
+})
+
+test('@font-face keeps safe descriptors such as font-feature-settings', () => {
+  const r = clean(
+    '<style>@font-face{font-family:A;src:url(data:font/ttf;base64,AA);' +
+      `font-feature-settings:"liga" 1, 'kern' off;font-variation-settings:"wght" 400;font-variant:small-caps;` +
+      'ascent-override:90%;descent-override:normal;size-adjust:105.5%}</style>'
+  )
+  assert.deepEqual(r.warnings, [])
+  assert.deepEqual(r.fontFaces, [
+    '@font-face{font-family:"A";src:url("data:font/ttf;base64,AA");' +
+      `font-feature-settings:"liga" 1, 'kern' off;font-variation-settings:"wght" 400;font-variant:small-caps;` +
+      'ascent-override:90%;descent-override:normal;size-adjust:105.5%}'
+  ])
+  for (const bad of ['font-feature-settings:url(https://e.com)', 'font-feature-settings:"toolong" 1', 'size-adjust:calc(1%)']) {
+    assert.deepEqual(clean(`<style>@font-face{font-family:A;src:url(data:font/ttf;base64,AA);${bad}}</style>`).fontFaces, [], bad)
+  }
+})
+
+test('an attribute gives the same result written plainly or with entities', () => {
+  const values = ['a,b', 'a b', 'a.b', '#fff', '10%', 'a+b', 'x-y', 'bold', '1 2,3']
+  const encode = (/** @type {string} */ v) => [...v].map((c) => (/[\w]/.test(c) ? c : `&#${c.codePointAt(0)};`)).join('')
+  for (const attr of ['class', 'fill', 'font-weight', 'points', 'stroke-dasharray']) {
+    for (const value of values) {
+      const plain = clean(`<rect ${attr}="${value}"/>`)
+      const encoded = clean(`<rect ${attr}="${encode(value)}"/>`)
+      assert.equal(encoded.svg, plain.svg, `${attr}="${value}"`)
+      assert.deepEqual(encoded.warnings, plain.warnings, `${attr}="${value}" warnings`)
+    }
+  }
 })
 
 test('comments, processing instructions and CDATA are handled', () => {

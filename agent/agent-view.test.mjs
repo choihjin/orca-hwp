@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assert, test } from 'orca/testing'
@@ -135,5 +135,41 @@ test('the CLI gives a structured error for a file that is not a Hangul document'
 test('the CLI rejects a malformed region', () => {
   withOutputDir((dir) => {
     assertError(run(['unused.hwp', '--region', '0,,100,100'], dir), 'invalid-argument')
+  })
+})
+
+test('the CLI preserves the input and rejects direct, symlink, and hard link output paths', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const original = readFileSync(sample)
+    const input = join(dir, 'input.hwp')
+    writeFileSync(input, original)
+    const symbolic = join(dir, 'symbolic.png')
+    const hard = join(dir, 'hard.png')
+    symlinkSync(input, symbolic)
+    linkSync(input, hard)
+    for (const out of [input, symbolic, hard]) {
+      assertError(run([input, '--out', out], dir), 'invalid-argument')
+      assert.deepEqual(readFileSync(out), original)
+      assert.deepEqual(readFileSync(input), original)
+    }
+  })
+})
+
+test('the CLI accepts a tiny region but rejects disjoint regions and oversized bitmaps', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const result = run([sample, '--region', '0,0,10,10', '--out', 'tiny.png'], dir)
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const png = readFileSync(JSON.parse(result.stdout).png)
+    assert.equal(png.subarray(0, 8).toString('hex'), pngSignature)
+    assert.equal(png.readUInt32BE(16), 15)
+    assert.equal(png.readUInt32BE(20), 15)
+    assertError(run([sample, '--region', '1000,0,250,250', '--out', 'disjoint.png'], dir), 'region-out-of-page')
+    assertError(run([sample, '--region', '0,0,10,10', '--scale', '10', '--out', 'oversized-page.png'], dir), 'invalid-argument')
+    assertError(run([sample, '--region', '0,0,5000,5000', '--out', 'oversized-crop.png'], dir), 'invalid-argument')
+    for (const output of ['disjoint.png', 'oversized-page.png', 'oversized-crop.png']) {
+      assert.ok(!existsSync(join(dir, output)))
+    }
   })
 })

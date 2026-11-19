@@ -26,7 +26,10 @@ export class SanitizeError extends Error {
 const ALLOWED_ELEMENTS = new Set(
   (
     'svg g defs clipPath mask pattern linearGradient radialGradient stop rect circle ellipse line ' +
-    'polyline polygon path text tspan image use symbol title desc'
+    'polyline polygon path text tspan image use symbol title desc ' +
+    // Beyond the design's list, because rhwp 0.8.7 emits them: line arrows, and image
+    // brightness/contrast/grayscale. None of these loads anything from outside the page.
+    'marker filter feColorMatrix feComponentTransfer feFuncR feFuncG feFuncB feFuncA'
   ).split(' ')
 )
 
@@ -42,7 +45,10 @@ const ALLOWED_ATTRIBUTES = new Set(
     'font-family font-size font-weight font-style font-variant font-stretch text-anchor ' +
     'dominant-baseline alignment-baseline baseline-shift letter-spacing word-spacing ' +
     'text-decoration textLength lengthAdjust dx dy rotate writing-mode ' +
-    'href xlink:href vector-effect paint-order shape-rendering text-rendering image-rendering'
+    'href xlink:href vector-effect paint-order shape-rendering text-rendering image-rendering ' +
+    'marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient ' +
+    'filter filterUnits primitiveUnits color-interpolation-filters in in2 result ' +
+    'type values tableValues slope intercept amplitude exponent'
   ).split(' ')
 )
 

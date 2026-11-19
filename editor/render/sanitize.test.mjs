@@ -85,6 +85,21 @@ test('identical @font-face rules are kept once', () => {
   assert.deepEqual(clean(`<style>${face}${face}</style><style>${face}</style>`).fontFaces, [face])
 })
 
+test('markers and image colour filters that rhwp emits are kept and prefixed', () => {
+  const body =
+    '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 8 4 L 0 8 z"/></marker>' +
+    '<filter id="rhwp-img-grayscale"><feColorMatrix type="matrix" values="1 0 0 0 0"/></filter>' +
+    '<filter id="bc"><feComponentTransfer><feFuncR type="linear" slope="1.0000" intercept="0.0800"/></feComponentTransfer></filter></defs>' +
+    '<line x1="0" y1="0" x2="5" y2="5" marker-end="url(#arrow)"/><g filter="url(#bc)"/>'
+  const r = clean(body)
+  assert.deepEqual(r.warnings, [])
+  assert.ok(r.svg.includes('<marker id="p0-arrow" markerWidth="8"'))
+  assert.ok(r.svg.includes('marker-end="url(#p0-arrow)"'))
+  assert.ok(r.svg.includes('<g filter="url(#p0-bc)"/>'))
+  assert.ok(r.svg.includes('<feFuncR type="linear" slope="1.0000" intercept="0.0800"/>'))
+  assert.ok(!clean('<filter><feImage href="https://e.com/a.png"/></filter>').svg.includes('e.com'))
+})
+
 test('ids and url(#…)/href="#…" references get the page prefix', () => {
   const r = sanitizeSvg(
     '<svg xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="body-clip-3"><rect/></clipPath></defs><g clip-path="url(#body-clip-3)"/></svg>',

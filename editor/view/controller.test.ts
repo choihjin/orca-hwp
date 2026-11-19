@@ -2,7 +2,9 @@ import { assert, test } from 'orca/testing'
 import { EngineError } from '../engine/rhwp-adapter.js'
 import type { EngineDocument } from '../engine/rhwp-adapter.js'
 import { documentKey, loadView, saveView } from '../state/view-memory'
-import { createController } from './controller'
+import { existsSync, readFileSync } from 'node:fs'
+import { initEngine, openDocument } from '../engine/rhwp-adapter.js'
+import { createController, isBlankPage } from './controller'
 import type { ErrorCode, ViewPort } from './controller'
 
 type FakeDoc = EngineDocument & { disposed: number; name: string }
@@ -213,4 +215,77 @@ test('dispose는 남은 기억을 바로 저장하고 화면을 비운다', asyn
   c.dispose()
   assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 4, zoom: 1 })
   assert.equal(view.last()?.kind, 'clear')
+})
+
+const PAPER = '<rect x="0" y="0" width="793.7" height="1122.5" fill="#ffffff"/>'
+function onePage(body: string, texts: string[]): FakeDoc {
+  const doc = fakeDoc('one', 1)
+  doc.renderPageSvg = () =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="793.7" height="1122.5" viewBox="0 0 793.7 1122.5">\n` +
+    `<defs>\n<clipPath id="body-clip-0"><rect x="56" y="56" width="680" height="1000"/></clipPath>\n</defs>\n` +
+    `${PAPER}\n${body}\n</svg>\n`
+  doc.pageTextRuns = () =>
+    texts.map((text) => ({ text, x: 56, y: 56, w: 680, h: 13, fontFamily: 'Batang', fontSize: 13, bold: false }))
+  return doc
+}
+
+test('내용 없는 한 쪽 문서는 empty 안내 (리뷰 재현)', async () => {
+  // pageCount 1, text runs all empty strings, SVG = white background + an empty group.
+  const doc = onePage('<g clip-path="url(#body-clip-0)"></g>', ['', ''])
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  const last = view.last()
+  assert.equal(last?.kind === 'error' && last.code, 'empty')
+  assert.ok(!view.calls.some((call) => call.kind === 'show'))
+  assert.equal(doc.disposed, 1)
+})
+
+test('도형만 있는 한 쪽 문서는 그대로 보인다', async () => {
+  const doc = onePage('<g><path d="M100 100 L400 400" stroke="#000"/><rect x="80" y="80" width="200" height="120" fill="none" stroke="#00f"/></g>', [])
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(view.last()?.kind, 'show')
+  c.dispose()
+})
+
+test('그림만 있는 한 쪽 문서는 그대로 보인다', async () => {
+  const doc = onePage('<image x="10" y="10" width="700" height="980" href="data:image/png;base64,AAAA"/>', [''])
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(view.last()?.kind, 'show')
+  c.dispose()
+})
+
+test('글자가 있는 한 쪽 문서는 그대로 보인다', async () => {
+  const doc = onePage('<text x="60" y="80" font-size="13">안내</text>', ['안내'])
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(view.last()?.kind, 'show')
+  c.dispose()
+})
+
+test('색 있는 쪽 크기 배경은 빈 쪽이 아니다', () => {
+  const doc = onePage('<rect x="0" y="0" width="793.7" height="1122.5" fill="#203040"/>', [])
+  assert.equal(isBlankPage(doc, 0), false)
+})
+
+const handbook = new URL('../../fixtures/2025 행정업무운영 편람(최종).hwpx', import.meta.url)
+test('실제 엔진: 편람의 빈 2쪽은 빈 쪽, 그림 표지·글자 쪽은 아님', async () => {
+  if (!existsSync(handbook)) {
+    console.log('# skip: fixtures/2025 행정업무운영 편람(최종).hwpx missing (npm run fixtures)')
+    return
+  }
+  await initEngine(new Uint8Array(readFileSync(new URL('../vendor/rhwp/rhwp_bg.wasm', import.meta.url))))
+  const doc = openDocument(new Uint8Array(readFileSync(handbook)))
+  try {
+    assert.equal(isBlankPage(doc, 1), true)
+    assert.equal(isBlankPage(doc, 0), false)
+    assert.equal(isBlankPage(doc, 2), false)
+  } finally {
+    doc.dispose()
+  }
 })

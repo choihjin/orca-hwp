@@ -17,6 +17,10 @@
 // 'engine' is a real rendering difference of rhwp; 'comparison' is how pdftotext -layout splits
 // rows. A listed page that still differs is reported as a known difference and does not fail; an
 // unlisted difference fails; a listed page that now matches gets a '해결됨' warning (not a failure).
+// Each entry also pins the page as it was when confirmed: `minMatched` (matched PDF lines, lower
+// bound) and `engineLines` (engine line count). Fewer matched lines or a different engine line
+// count fails, so a new difference cannot hide on a listed page; more matched lines with the same
+// engine line count gets a '개선됨' warning.
 // Known engine differences are summarised again at the very end so they cannot be overlooked.
 import { existsSync, readFileSync } from 'node:fs'
 import { ENGINE_INFO, EngineError, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
@@ -27,7 +31,10 @@ const config = JSON.parse(readFileSync(new URL('./fixtures.json', import.meta.ur
 const fixturesUrl = new URL('../fixtures/', import.meta.url)
 const verbose = process.argv.includes('--verbose')
 
-/** @typedef {{ page: number, kind: 'engine' | 'comparison', reason: string, evidence: string }} KnownDifference */
+/**
+ * @typedef {{ page: number, kind: 'engine' | 'comparison', reason: string, evidence: string,
+ *   minMatched: number, engineLines: number }} KnownDifference
+ */
 
 /** @typedef {import('../editor/engine/rhwp-adapter.js').TextRun} TextRun */
 
@@ -97,11 +104,17 @@ for (const sample of config.samples) {
   const known = Array.isArray(sample.knownDifferences) ? sample.knownDifferences : []
   const checkPages = Array.isArray(sample.checks) ? sample.checks.map((/** @type {{ page: number }} */ c) => c.page) : []
   const badEntries = known.filter(
-    (k) => !checkPages.includes(k.page) || !['engine', 'comparison'].includes(k.kind) || !k.reason || !k.evidence
+    (k) =>
+      !checkPages.includes(k.page) ||
+      !['engine', 'comparison'].includes(k.kind) ||
+      !k.reason ||
+      !k.evidence ||
+      !Number.isInteger(k.minMatched) ||
+      !Number.isInteger(k.engineLines)
   )
   if (badEntries.length > 0) {
     row.pages = 'knownDifferences 오류'
-    details.push(`${sample.name}: knownDifferences needs { page (a check page), kind 'engine'|'comparison', reason, evidence }: ${JSON.stringify(badEntries)}`)
+    details.push(`${sample.name}: knownDifferences needs { page (a check page), kind 'engine'|'comparison', reason, evidence, minMatched, engineLines }: ${JSON.stringify(badEntries)}`)
     continue
   }
   if (!existsSync(url)) {
@@ -181,7 +194,26 @@ for (const sample of config.samples) {
           parts.push(`p${check.page} ${count} 해결됨`)
           warnings.push(`경고: ${sample.name} page ${check.page} now matches; remove its knownDifferences (${kinds}) if this holds`)
         } else if (!exact && listed.length > 0) {
-          parts.push(`p${check.page} ${count} 알려진 차이(${kinds})`)
+          // every entry of the page pins the same snapshot; check each so a stale one shows up
+          const drift = listed.filter((k) => matched < k.minMatched || actual.length !== k.engineLines)
+          const improved = listed.filter((k) => matched > k.minMatched && actual.length === k.engineLines)
+          if (drift.length > 0) {
+            ok = false
+            parts.push(`p${check.page} ${count} 알려진 차이 바뀜(${kinds})`)
+            for (const k of drift) {
+              details.push(
+                `${sample.name} page ${check.page}: 알려진 차이(${k.kind})가 바뀜 — 일치 ${matched}줄(하한 ${k.minMatched}), ` +
+                  `엔진 ${actual.length}줄(기록 ${k.engineLines}). 다시 확인하고 knownDifferences를 고친다.`
+              )
+            }
+          } else {
+            parts.push(`p${check.page} ${count} 알려진 차이(${kinds})`)
+          }
+          for (const k of improved) {
+            warnings.push(
+              `경고: ${sample.name} page ${check.page} 개선됨 — 일치 ${matched}줄 > 하한 ${k.minMatched}(${k.kind}); 확인 후 minMatched를 올린다`
+            )
+          }
           row.known++
           for (const k of listed) {
             details.push(`${sample.name} page ${check.page}: 알려진 차이(${k.kind}) ${k.reason}`)

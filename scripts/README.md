@@ -70,7 +70,8 @@ node scripts/fetch-fixtures.mjs --update-expected
 기대값은 고치지 않는다. 대신 사람이 **확인한** 줄 차이만 `fixtures.json`의 표본별 `knownDifferences`에 적는다.
 
 ```json
-{ "page": 33, "kind": "engine", "reason": "한 줄 이유", "evidence": "확인한 근거(단어 상자 좌표, 줄 끝 글자 등)" }
+{ "page": 33, "kind": "engine", "reason": "한 줄 이유", "evidence": "확인한 근거(단어 상자 좌표, 줄 끝 글자 등)",
+  "minMatched": 30, "engineLines": 40 }
 ```
 
 - `kind: "engine"`: rhwp가 기준 PDF와 실제로 다르게 그린 것(줄바꿈, 쪽 나눔).
@@ -79,6 +80,8 @@ node scripts/fetch-fixtures.mjs --update-expected
 - 판정: 목록에 있는 쪽의 차이는 '알려진 차이'로 출력하고 불합격으로 세지 않는다. 목록에 없는 쪽의 차이는 불합격.
   목록에 있는데 이제 일치하면 '해결됨' 경고를 내고(불합격 아님) 항목을 지울지 사람이 판단한다. `page`가 확인 쪽이
   아니거나 `kind`·`reason`·`evidence`가 빠진 항목은 그 표본을 불합격으로 만든다.
-- 목록은 쪽 단위다. 알려진 쪽에 새 차이가 더 생겨도 같은 쪽이면 가려진다. 표의 `일치/기대` 숫자가 바뀌었는지를
-  함께 본다.
+- `minMatched`·`engineLines`는 확인할 때의 그 쪽 상태다(일치 줄 수 하한, 엔진 줄 수). 실행 결과의 일치 줄이
+  `minMatched`보다 적거나 엔진 줄 수가 `engineLines`와 다르면 불합격('알려진 차이 바뀜')이다. 알려진 쪽에 새 차이가
+  생겨도 가려지지 않게 하려는 것이다. 엔진 줄 수가 같고 일치 줄만 늘면 '개선됨' 경고(불합격 아님)를 내고, 확인 후
+  `minMatched`를 올린다. 엔진이나 줄 묶기를 바꿔 숫자가 달라지면 그 쪽을 다시 확인하고 두 값을 고친다.
 - 출력 맨 아래에 '알려진 엔진 차이'를 따로 모아 찍는다. 합격으로 세지만 렌더가 기준 PDF와 다른 곳이다.

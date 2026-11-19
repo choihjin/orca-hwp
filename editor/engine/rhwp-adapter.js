@@ -79,6 +79,23 @@ function classify(message) {
 }
 
 /**
+ * Whether a ZIP ends with a complete end-of-central-directory record (signature PK\x05\x06, 22
+ * bytes plus its comment) reaching exactly to the last byte. A ZIP cut short loses it, and rhwp
+ * then reports UNSUPPORTED_FILE_FORMAT as if the package were some other kind of ZIP.
+ * @param {Uint8Array} bytes
+ */
+function hasZipEnd(bytes) {
+  const n = bytes.length
+  for (let at = n - 22; at >= 0 && at >= n - 22 - 0xffff; at--) {
+    if (bytes[at] === 0x50 && bytes[at + 1] === 0x4b && bytes[at + 2] === 0x05 && bytes[at + 3] === 0x06) {
+      const commentLength = bytes[at + 20] | (bytes[at + 21] << 8)
+      if (at + 22 + commentLength === n) return true
+    }
+  }
+  return false
+}
+
+/**
  * @param {Uint8Array} bytes
  * @returns {EngineDocument}
  */
@@ -94,7 +111,12 @@ export function openDocument(bytes) {
   try {
     doc = new HwpDocument(bytes)
   } catch (error) {
-    throw classify(String(error instanceof Error ? error.message : error))
+    const classified = classify(String(error instanceof Error ? error.message : error))
+    // The magic bytes already said ZIP: an incomplete ZIP is a damaged file, not an unsupported one.
+    if (classified.code === 'unsupported' && detectKind(bytes) === 'hwpx' && !hasZipEnd(bytes)) {
+      throw new EngineError('corrupt', `${classified.message} (ZIP end record missing: file is truncated)`, classified.engineCode)
+    }
+    throw classified
   }
   let disposed = false
   return {

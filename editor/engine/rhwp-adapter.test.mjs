@@ -103,3 +103,27 @@ test('a sample HWP gives page count, size, SVG and text runs', async () => {
   assert.deepEqual(Object.keys(runs[0]).sort(), ['bold', 'fontFamily', 'fontSize', 'h', 'text', 'w', 'x', 'y'])
   doc.dispose()
 })
+
+test('a ZIP cut short (no complete end record) is corrupt, not unsupported', async () => {
+  await initEngine(wasmBytes)
+  const zip = minimalZip()
+  for (const cut of [1, 2, 21, 22, 40]) {
+    assert.equal(codeOf(() => openDocument(zip.slice(0, zip.length - cut))), 'corrupt', `cut ${cut}`)
+  }
+  // a complete ZIP that is not HWPX keeps its earlier classification
+  assert.ok(['unsupported', 'corrupt'].includes(codeOf(() => openDocument(zip))))
+})
+
+const hwpxUrl = new URL('../../fixtures/2025년 기부·답례품 실적 지자체 보고서_양식.hwpx', import.meta.url)
+
+test('a truncated HWPX sample is corrupt', async () => {
+  if (!existsSync(hwpxUrl)) return
+  await initEngine(wasmBytes)
+  const full = new Uint8Array(readFileSync(hwpxUrl))
+  for (const cut of [2, 1000, full.length >> 1]) {
+    assert.equal(codeOf(() => openDocument(full.slice(0, full.length - cut))), 'corrupt', `cut ${cut}`)
+  }
+  const doc = openDocument(full)
+  assert.equal(doc.pageCount, 30)
+  doc.dispose()
+})

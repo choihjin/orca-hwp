@@ -24,7 +24,7 @@ export type Controller = {
   dispose(): void
 }
 
-/** Elements that put ink on the page. A page-sized white `<rect>` is the paper, not ink. */
+/** Elements that put ink on the page. Only the engine's paper (see `isPaper`) is not ink. */
 const INK = /<(image|path|line|polyline|polygon|circle|ellipse|use|rect)\b([^>]*)>/g
 
 function attr(tag: string, name: string): string | null {
@@ -36,19 +36,24 @@ function isPaper(tagAttrs: string, width: number, height: number): boolean {
     const v = attr(tagAttrs, name)
     return v === null ? fallback : parseFloat(v)
   }
-  const fill = (attr(tagAttrs, 'fill') ?? '#ffffff').trim().toLowerCase()
+  const fill = (attr(tagAttrs, 'fill') ?? '').trim().toLowerCase()
+  const stroke = (attr(tagAttrs, 'stroke') ?? 'none').trim().toLowerCase()
   return (
+    stroke === 'none' &&
+    attr(tagAttrs, 'transform') === null &&
     Math.abs(num('x', 0)) < 0.5 &&
     Math.abs(num('y', 0)) < 0.5 &&
     Math.abs(num('width', -1) - width) < 0.5 &&
     Math.abs(num('height', -1) - height) < 0.5 &&
-    ['#fff', '#ffffff', 'white', 'none'].includes(fill)
+    ['#fff', '#ffffff', 'white'].includes(fill)
   )
 }
 
 /**
  * True when page `i` shows nothing: no text run with visible characters and, outside `<defs>`,
- * no text content and no drawing element other than the white page background. Design: a
+ * no text content and no drawing element other than the paper. The paper is the engine's first
+ * element: a top-level, page-sized white `<rect>` at 0,0 with no stroke and no transform. Any
+ * other rect (a page-sized frame with a border, a second white sheet) is content. Design: a
  * document with no pages or only an empty body gets a notice, not a blank sheet.
  */
 export function isBlankPage(doc: EngineDocument, i: number): boolean {
@@ -59,14 +64,17 @@ export function isBlankPage(doc: EngineDocument, i: number): boolean {
     const svg = doc.renderPageSvg(i).replace(/<defs\b[\s\S]*?<\/defs>/g, '')
     const rootTag = /<svg\b[^>]*>/.exec(svg)?.[0] ?? ''
     const width = parseFloat(attr(rootTag, 'width') ?? 'NaN')
+    let body = svg.slice(svg.indexOf(rootTag) + rootTag.length)
     const height = parseFloat(attr(rootTag, 'height') ?? 'NaN')
-    for (const m of svg.matchAll(INK)) {
-      if (!(m[1] === 'rect' && isPaper(m[2], width, height))) {
-        return false
-      }
+    const first = /^\s*<rect\b([^>]*)>/.exec(body)
+    if (first && isPaper(first[1], width, height)) {
+      body = body.slice(first[0].length)
+    }
+    if (body.search(INK) !== -1) {
+      return false
     }
     // Character data left once tags are gone is text drawn on the page.
-    return svg.replace(/<[^>]*>/g, '').trim() === ''
+    return body.replace(/<[^>]*>/g, '').trim() === ''
   } catch {
     // Let the view try and report the page itself.
     return false

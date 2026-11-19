@@ -1,4 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync,
+  readFileSync, realpathSync, statSync, writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -10,6 +13,7 @@ import { textLines } from './text-lines.js'
 
 const engineWasm = new URL('../editor/vendor/rhwp/rhwp_bg.wasm', import.meta.url)
 const resvgWasm = new URL('./vendor/resvg/index_bg.wasm', import.meta.url)
+const maxPixels = 16 * 1024 * 1024 // 64 MiB of RGBA pixels per bitmap.
 const usage = 'Usage: node agent-view.mjs <file> [--page N] [--region x,y,w,h] [--scale S] [--out PATH] [--text] [--json] [--bundled-fonts-only]'
 
 class CliError extends Error {
@@ -80,10 +84,47 @@ function readOptions(args) {
 function scaledDimensions({ width, height }, scale) {
   const pixelWidth = Math.max(1, Math.round(width * scale))
   const pixelHeight = Math.max(1, Math.round(height * scale))
-  if (![pixelWidth, pixelHeight].every(Number.isSafeInteger)) {
-    throw new CliError('invalid-argument', 'Scaled PNG dimensions are too large')
+  const pixels = pixelWidth * pixelHeight
+  if (!Number.isSafeInteger(pixels) || pixels > maxPixels) {
+    throw new CliError('invalid-argument', `Scaled bitmap exceeds the ${maxPixels}-pixel limit`)
   }
   return { width: pixelWidth, height: pixelHeight }
+}
+
+function rejectInputAsOutput(input, output) {
+  if (output && input.dev === output.dev && input.ino === output.ino) {
+    throw new CliError('invalid-argument', '--out refers to the input document')
+  }
+}
+
+function readInput(file, out) {
+  const fd = openSync(file, 'r')
+  try {
+    const stat = fstatSync(fd, { bigint: true })
+    if (out) {
+      const output = statSync(out, { bigint: true, throwIfNoEntry: false })
+      if (output && realpathSync(out) === realpathSync(file)) {
+        throw new CliError('invalid-argument', '--out refers to the input document')
+      }
+      rejectInputAsOutput(stat, output)
+    }
+    return { bytes: readFileSync(fd), stat }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function writePng(path, bytes, inputStat) {
+  // Opening without O_TRUNC lets us check the actual target even if a link
+  // changed between the initial check and this write.
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT)
+  try {
+    rejectInputAsOutput(inputStat, fstatSync(fd, { bigint: true }))
+    ftruncateSync(fd, 0)
+    writeFileSync(fd, bytes)
+  } finally {
+    closeSync(fd)
+  }
 }
 
 function prepareSvg(svg, { width, height }) {
@@ -129,7 +170,8 @@ async function renderPng(svg, fontBuffers, crop) {
 
 async function renderPage(options) {
   const { file, page, region, scale, bundledFontsOnly } = options
-  const bytes = readFileSync(file)
+  const outputPath = options.out && resolve(options.out)
+  const { bytes, stat } = readInput(file, outputPath)
   await initEngine(readFileSync(engineWasm))
   const doc = openDocument(bytes)
   try {
@@ -138,23 +180,25 @@ async function renderPage(options) {
     }
     const index = page - 1
     const pageSize = doc.pageSize(index)
-    const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
-    const warnings = [...result.warnings]
+    if (region && (region.x >= pageSize.width || region.y >= pageSize.height)) {
+      throw new CliError('region-out-of-page', '--region does not overlap the page')
+    }
+    const pageDimensions = scaledDimensions(pageSize, scale)
     const crop = region && {
       x: Math.round(region.x * scale),
       y: Math.round(region.y * scale),
       ...scaledDimensions(region, scale)
     }
+    const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
+    const warnings = [...result.warnings]
     // Moving the SVG viewBox can trap inside resvg. Use the same viewport as a
     // whole-page render and crop its pixels afterwards.
-    const svg = prepareSvg(result.svg, scaledDimensions(pageSize, scale))
-    const fonts = await prepareFonts(svg, bundledFontsOnly, warnings)
+    const svg = prepareSvg(result.svg, pageDimensions)
+    const fonts = await prepareFonts(svg, bundledFontsOnly, warnings, result.fontFaces)
     const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
     const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, crop)
-    const png = options.out
-      ? resolve(options.out)
-      : join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
-    writeFileSync(png, pngBytes)
+    const png = outputPath ?? join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
+    writePng(png, pngBytes, stat)
     return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings }
   } finally {
     doc.dispose()

@@ -163,10 +163,17 @@ export function createController(deps: {
         return
       }
       pending = { page: state.page, zoom: state.zoom }
-      if (timer !== null) {
-        clearTimeout(timer)
+      if (timer === null) {
+        // Leading edge: write the first change now. An `orca plugin shot` closes the editor right
+        // after it paints, and pagehide is not guaranteed when Orca removes the frame, so a write
+        // that waits can be lost. Changes that follow within saveDelayMs (scrolling) are
+        // coalesced and the last one is written at the trailing edge.
+        flush()
+        timer = setTimeout(() => {
+          timer = null
+          flush()
+        }, saveDelayMs)
       }
-      timer = setTimeout(flush, saveDelayMs)
     },
     dispose() {
       release()

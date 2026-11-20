@@ -90,6 +90,21 @@ test('a truncated HWP is corrupt and keeps the engine usable', async () => {
   doc.dispose()
 })
 
+// Committed synthetic documents (scripts/testdata/README.md): inline tables and text boxes in
+// one paragraph whose stored line ladder resets vpos once. npm 0.8.7 opened a page per line
+// (27 and 19 pages); the 0.8.7-p1 patch follows the stored ladder (2 pages each).
+for (const [file, pages] of [
+  ['synthetic-tac-sibling-reset.hwp', 2],
+  ['synthetic-tac-sibling-reset-shapes.hwp', 2],
+]) {
+  test(`${file}: inline tables after a stored page reset fill ${pages} pages, not one per line`, async () => {
+    await initEngine(wasmBytes)
+    const doc = openDocument(new Uint8Array(readFileSync(new URL(`../../scripts/testdata/${file}`, import.meta.url))))
+    assert.equal(doc.pageCount, pages)
+    doc.dispose()
+  })
+}
+
 test('a sample HWP gives page count, size, SVG and text runs', async () => {
   if (!existsSync(sampleUrl)) return
   await initEngine(wasmBytes)

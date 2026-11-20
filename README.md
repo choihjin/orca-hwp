@@ -6,7 +6,7 @@ A read-only, page-by-page viewer for Hangul word processor documents (`.hwpx`, `
 
 ## Status (0.1.0, 2026-11-20)
 
-- Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine, including tables, images, headers and footers, and mixed portrait and landscape pages.
+- Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine plus a pagination patch (our own build, `0.8.7-p1`; it fixes a page per table when one paragraph holds many inline tables and text boxes, see the [decision record](docs/decisions/2026-11-20-rhwp-tac-pagination-patch.md), Korean), including tables, images, headers and footers, and mixed portrait and landscape pages.
 - Draws the visible pages first and the rest as you scroll, so the first page of a document with hundreds of pages appears right away.
 - Remembers the last page and zoom for each document.
 - Works offline and asks for no plugin capabilities. It ships 13 open (OFL) fonts for Korean text and prefers the document's original fonts, such as HCR Batang, when they are installed.
@@ -61,7 +61,7 @@ npm run check:size    # check Orca's size limits
 orca plugin dev watch .
 ```
 
-The editor runs with no build step. Third-party files (rhwp, fonts, PNG renderer) are downloaded and hash-checked by the scripts in `build/` (`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). `npm run notices` writes the third-party notices.
+The editor runs with no build step. Third-party files (rhwp, fonts, PNG renderer) are downloaded and hash-checked by the scripts in `build/` (`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). `npm run notices` writes the third-party notices. The engine WASM is built from v0.8.7 with the patch in `build/rhwp-patches/`; `build/build-rhwp-patched.sh` rebuilds it and compares the hash with the pin (needs a Rust toolchain).
 
 | Path | What it is |
 |---|---|

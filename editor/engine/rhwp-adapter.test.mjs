@@ -59,7 +59,7 @@ test('initEngine twice initialises once and opens nothing yet', async () => {
   await initEngine(wasmBytes)
   await initEngine(wasmBytes)
   assert.equal(ENGINE_INFO.name, 'rhwp')
-  assert.equal(ENGINE_INFO.version, '0.8.7')
+  assert.equal(ENGINE_INFO.version, '0.8.7-p1')
 })
 
 test('bytes that are not a Hangul document are not-hangul', async () => {

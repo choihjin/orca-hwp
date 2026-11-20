@@ -53,7 +53,13 @@ const workspaceSource = `https://github.com/edwardkim/rhwp/tree/${pins.rhwp.upst
 const sections = [
   '본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.\n\n' +
     '"한글", "한컴", "HWP", "HWPX"는 주식회사 한글과컴퓨터의 등록 상표입니다. 이 플러그인은 한글과컴퓨터와 관계없는 독립 프로젝트입니다.',
-  section(`rhwp@${pins.rhwp.version} (MIT)`, pins.rhwp.tarball.url, engineText),
+  section(
+    pins.rhwp.patched
+      ? `rhwp@${pins.rhwp.version} (MIT), modified by this plugin as ${pins.rhwp.patched.label}: ${pins.rhwp.patched.patch.path}`
+      : `rhwp@${pins.rhwp.version} (MIT)`,
+    pins.rhwp.tarball.url,
+    engineText,
+  ),
   section('rhwp upstream THIRD_PARTY_LICENSES.md', pins.rhwp.thirdPartyLicenses.url, upstreamText),
 ]
 

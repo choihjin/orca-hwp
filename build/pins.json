@@ -38,6 +38,28 @@
       "url": "https://raw.githubusercontent.com/edwardkim/rhwp/1a76570e833917d15817415a53c09ad61ab3203f/THIRD_PARTY_LICENSES.md",
       "sha256": "bb40fa5d0fa44bf2ff8b2b5dd7085562b58557a69eaa08b6bb5a4fc94252af88",
       "size": 13162
+    },
+    "patched": {
+      "label": "0.8.7-p1",
+      "reason": "Inline (treat-as-char) tables and shapes in one paragraph got a new page per line after a page break; upstream fix proposed, unreleased",
+      "base": "v0.8.7 (1a76570e833917d15817415a53c09ad61ab3203f)",
+      "patch": {
+        "path": "build/rhwp-patches/v0.8.7-tac-sibling-reset.diff",
+        "sha256": "feb2df0770ababe49e6e06870b3352df85a38a27571ef16e4629986e60765986",
+        "size": 9176
+      },
+      "wasm": {
+        "sha256": "f43f082d6103c5966f92ab99831b17721b5ee4134671049ec7f624c7746c2843",
+        "size": 11805164
+      },
+      "toolchain": {
+        "rust": "1.93.1",
+        "target": "wasm32-unknown-unknown",
+        "wasm-pack": "0.15.0",
+        "wasm-bindgen": "0.2.127",
+        "wasm-opt": "binaryen version_117 (-O)"
+      },
+      "command": "sh scripts/wasm-pack-locked.sh --target web --release --out-dir <out>"
     }
   },
   "fonts": {

@@ -32,6 +32,10 @@ function assertRejected({ changedMember, updateTarballHash }) {
     writeFileSync(join(output, 'rhwp.d.ts'), existing)
     for (const member of Object.keys(tarball.files)) {
       const bytes = readFileSync(new URL(member.slice('package/'.length), source))
+      if (member === 'package/rhwp_bg.wasm') {
+        // The vendored WASM is the patched build, not npm's: pin the fake tarball to it.
+        tarball.files[member] = { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
+      }
       if (member === changedMember) bytes[0] ^= 1
       writeFileSync(join(dir, member), bytes)
     }
@@ -61,6 +65,55 @@ function assertRejected({ changedMember, updateTarballHash }) {
 
 test('rejects a repacked rhwp tarball even when all member files match', () => {
   assertRejected({ updateTarballHash: false })
+})
+
+test('rejects a vendored WASM that is not the pinned patched build, writing nothing', () => {
+  const { rhwp } = structuredClone(pins)
+  const { tarball } = rhwp
+  assert.ok(rhwp.patched, 'pins.rhwp.patched is set')
+  mkdirSync(scratch, { recursive: true })
+  const dir = mkdtempSync(join(scratch, 'vendor-rhwp-test-'))
+  try {
+    const build = join(dir, 'build')
+    const output = join(dir, 'editor/vendor/rhwp')
+    mkdirSync(join(build, 'rhwp-patches'), { recursive: true })
+    mkdirSync(output, { recursive: true })
+    mkdirSync(join(dir, 'package'))
+    for (const script of ['vendor-rhwp.mjs', 'vendor-data.mjs']) {
+      copyFileSync(new URL(script, import.meta.url), join(build, script))
+    }
+    copyFileSync(new URL(`../${rhwp.patched.patch.path}`, import.meta.url), join(dir, rhwp.patched.patch.path))
+
+    for (const member of Object.keys(tarball.files)) {
+      const bytes = readFileSync(new URL(member.slice('package/'.length), source))
+      tarball.files[member] = { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
+      writeFileSync(join(dir, member), bytes)
+    }
+    execFileSync('tar', ['-czf', 'core.tgz', 'package'], { cwd: dir })
+    const archive = readFileSync(join(dir, 'core.tgz'))
+    tarball.size = archive.length
+    tarball.sha256 = createHash('sha256').update(archive).digest('hex')
+    writeFileSync(join(build, 'pins.json'), JSON.stringify({ rhwp }))
+
+    // A stale WASM where the patched build should be: npm's bytes would look just like this.
+    const stale = readFileSync(new URL('rhwp_bg.wasm', source))
+    stale[0] ^= 1
+    writeFileSync(join(output, 'rhwp_bg.wasm'), stale)
+
+    const result = spawnSync(process.execPath, ['--import', mockFetch, 'build/vendor-rhwp.mjs'], {
+      cwd: dir,
+      env: { ...process.env, TMPDIR: dir },
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+    assert.equal(result.status, 1, result.error?.message ?? (result.stderr || result.stdout))
+    assert.ok(result.stderr.includes('editor/vendor/rhwp/rhwp_bg.wasm: expected'), result.stderr)
+    assert.ok(result.stderr.includes('build/build-rhwp-patched.sh'), result.stderr)
+    assert.deepEqual(readdirSync(output), ['rhwp_bg.wasm'])
+    assert.deepEqual(readFileSync(join(output, 'rhwp_bg.wasm')), stale)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 for (const file of ['rhwp.d.ts', 'rhwp_bg.wasm.d.ts', 'LICENSE']) {

@@ -87,29 +87,11 @@ export function createController(deps: {
   engine: { open(bytes: Uint8Array): EngineDocument }
   view: ViewPort
   storage: Storage | null
-  /** Wait after the last `remember` before writing it; default 500 ms. */
-  saveDelayMs?: number
 }): Controller {
   const { engine, view, storage } = deps
-  const saveDelayMs = deps.saveDelayMs ?? 500
   let current: EngineDocument | null = null
   let key: string | null = null
-  let pending: ViewState | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
-
-  function flush(): void {
-    if (timer !== null) {
-      clearTimeout(timer)
-      timer = null
-    }
-    if (pending && key) {
-      saveView(storage, key, pending)
-    }
-    pending = null
-  }
-
   function release(): void {
-    flush()
     key = null
     if (current) {
       const doc = current
@@ -159,21 +141,12 @@ export function createController(deps: {
       view.showDocument(doc, page, zoom ?? 1)
     },
     remember(state) {
-      if (!current) {
+      if (!current || !key) {
         return
       }
-      pending = { page: state.page, zoom: state.zoom }
-      if (timer === null) {
-        // Leading edge: write the first change now. An `orca plugin shot` closes the editor right
-        // after it paints, and pagehide is not guaranteed when Orca removes the frame, so a write
-        // that waits can be lost. Changes that follow within saveDelayMs (scrolling) are
-        // coalesced and the last one is written at the trailing edge.
-        flush()
-        timer = setTimeout(() => {
-          timer = null
-          flush()
-        }, saveDelayMs)
-      }
+      // Written at once: onViewChange fires only when the page or zoom changes, and an
+      // `orca plugin shot` closes the editor right after it paints, with no pagehide guaranteed.
+      saveView(storage, key, { page: state.page, zoom: state.zoom })
     },
     dispose() {
       release()

@@ -197,7 +197,7 @@ test('기억한 쪽이 범위 밖이면 0쪽', async () => {
 test('보던 쪽을 잠시 뒤 기억한다', async () => {
   const storage = memoryStorage()
   const doc = fakeDoc('a', 10)
-  const c = createController({ engine: engineOf(doc), view: fakeView(), storage, saveDelayMs: 5 })
+  const c = createController({ engine: engineOf(doc), view: fakeView(), storage })
   await c.load(bytesA)
   c.remember({ page: 6, zoom: 1.25 })
   c.remember({ page: 7, zoom: 1.25 })
@@ -209,29 +209,27 @@ test('보던 쪽을 잠시 뒤 기억한다', async () => {
 test('쪽을 옮기면 바로 기억한다: 곧 닫혀도 남는다 (Orca 캡처 재현)', async () => {
   // plugin shot closes the editor right after it paints; pagehide is not guaranteed then.
   const storage = memoryStorage()
-  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view: fakeView(), storage, saveDelayMs: 10_000 })
+  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view: fakeView(), storage })
   await c.load(bytesA)
   c.remember({ page: 3, zoom: 1 })
   assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 3, zoom: 1 })
 })
 
-test('연달아 옮기면 첫 위치는 바로, 마지막 위치는 잠시 뒤 기억한다', async () => {
+test('연달아 옮기면 매번 바로 기억한다: 곧 닫혀도 마지막 쪽이 남는다 (Orca 캡처 재현)', async () => {
+  // PageDown twice and the shot closes at once: the last page, not the first move, must stay.
   const storage = memoryStorage()
-  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view: fakeView(), storage, saveDelayMs: 20 })
+  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view: fakeView(), storage })
   await c.load(bytesA)
   c.remember({ page: 1, zoom: 1 })
   c.remember({ page: 2, zoom: 1 })
   c.remember({ page: 5, zoom: 1 })
-  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 1, zoom: 1 })
-  await new Promise((resolve) => setTimeout(resolve, 60))
   assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 5, zoom: 1 })
-  c.dispose()
 })
 
 test('dispose는 남은 기억을 바로 저장하고 화면을 비운다', async () => {
   const storage = memoryStorage()
   const view = fakeView()
-  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view, storage, saveDelayMs: 10_000 })
+  const c = createController({ engine: engineOf(fakeDoc('a', 10)), view, storage })
   await c.load(bytesA)
   c.remember({ page: 4, zoom: 1 })
   c.dispose()

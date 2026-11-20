@@ -1,6 +1,7 @@
 #!/bin/bash
 # Renders the plugin page images from the HTML sources in this folder.
-#   assets/src/render.sh shots   # viewer PNGs of public samples (npm run fixtures first; current Orca theme)
+#   assets/src/render.sh shots   # viewer PNGs of public samples in both themes (npm run fixtures first;
+#                                # Orca's window must be minimized: --theme and --act need it)
 #   assets/src/render.sh images  # icon, cover and screenshots with headless Chrome
 # Only public sample documents go into these images.
 set -euo pipefail
@@ -12,7 +13,10 @@ PROFILE="$(mktemp -d)"
 trap 'rm -rf "$PROFILE"' EXIT
 
 shoot() { # name sample
-  "$ORCA" plugin shot local.hwp-viewer --editor "fixtures/$2" --width 900 --height 1240 --out "$SRC/shots/$1-dark.png" --json >/dev/null
+  for theme in light dark; do
+    "$ORCA" plugin shot "${PLUGIN:-choihjin.hwp-viewer}" --editor "fixtures/$2" --width 900 --height 1240 --theme "$theme" \
+      --act '[{"key":"Home"}]' --out "$SRC/shots/$1-$theme.png" --json >/dev/null
+  done
 }
 
 render() { # html-with-query out width height
@@ -33,8 +37,10 @@ case "${1:-}" in
     mkdir -p assets/screenshots
     render icon.html assets/icon.png 512 512
     render "frame.html?slide=cover&theme=dark" assets/cover.png 1600 1000
-    for slide in table large agent; do
-      render "frame.html?slide=$slide&theme=dark" "assets/screenshots/$slide-dark.png" 1600 1000
+    for theme in light dark; do
+      for slide in table large agent; do
+        render "frame.html?slide=$slide&theme=$theme" "assets/screenshots/$slide-$theme.png" 1600 1000
+      done
     done
     ;;
   *) echo "usage: $0 shots|images" >&2; exit 2 ;;

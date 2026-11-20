@@ -1,5 +1,7 @@
 # HWP Viewer for Orca
 
+<img src="assets/cover.png" alt="The HWP Viewer icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook" width="800">
+
 A read-only, page-by-page viewer for Hangul word processor documents (`.hwpx`, `.hwp`) inside [Orca](https://github.com/stablyai/orca). Orca's agents can get the same view as a PNG, so they can check how a document actually looks.
 
 [한국어](README.ko.md)
@@ -17,6 +19,31 @@ Limits:
 - Pages are drawn by rhwp and can differ from Hancom Office. Line and page breaks differed in a document with complex tables that cross pages ([decision record](docs/decisions/2026-11-19-phase2-integration.md), Korean).
 - No editing, saving, printing or in-document search yet.
 - Orca desktop app only. Browser clients (`orca serve`) cannot open it.
+
+## Screenshots
+
+Table-heavy documents, page by page.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/table-dark.png">
+  <img src="assets/screenshots/table-light.png" alt="A public HWP notice with a long table, drawn page by page in the viewer" width="800">
+</picture>
+
+Long documents show their first page right away; the rest is drawn as you scroll.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/large-dark.png">
+  <img src="assets/screenshots/large-light.png" alt="The cover page of a 383-page HWPX handbook in the viewer" width="800">
+</picture>
+
+Agents get any page or region as a PNG and text from the same engine.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/agent-dark.png">
+  <img src="assets/screenshots/agent-light.png" alt="The agent-view command and the zoomed PNG it renders from a page region" width="800">
+</picture>
+
+All images use public sample documents (`assets/src/`).
 
 ## Install
 

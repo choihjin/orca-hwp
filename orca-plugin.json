@@ -5,6 +5,32 @@
   "name": "HWP Viewer",
   "version": "0.1.0",
   "description": "Read-only viewer for Hangul word processor documents (.hwp and .hwpx) inside Orca, drawn page by page with the rhwp engine. An independent project, not affiliated with Hancom.",
+  "repository": "https://github.com/choihjin/orca-hwp",
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "The HWP Viewer icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook"
+  },
+  "screenshots": [
+    {
+      "path": "assets/screenshots/table-dark.png",
+      "alt": "A public HWP notice with a long table, drawn page by page in the viewer",
+      "caption": "Table-heavy documents, page by page",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/screenshots/large-dark.png",
+      "alt": "The cover page of a 383-page HWPX handbook in the viewer",
+      "caption": "The first page of a long document right away",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/screenshots/agent-dark.png",
+      "alt": "The agent-view command and the zoomed PNG it renders from a page region",
+      "caption": "Agents get the same page as a PNG and text",
+      "theme": "dark"
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },

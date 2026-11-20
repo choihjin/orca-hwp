@@ -10,7 +10,7 @@ PDF 기능만 끈 경량 WASM은 **19,210,456 B**로 Orca의 16 MiB 한도를 **
 | Rust/Cargo | 1.93.1 및 `wasm32-unknown-unknown` | `~/.rustup/toolchains/1.93.1-aarch64-apple-darwin` |
 | wasm-pack | 0.15.0 | `~/.cargo/bin/wasm-pack` |
 | wasm-bindgen | 0.2.127 | `~/.cargo/bin/wasm-bindgen` |
-| wasm-opt | Binaryen 117 | `/private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/binaryen-version_117/bin/wasm-opt` |
+| wasm-opt | Binaryen 117 | `<작업 폴더>/binaryen-version_117/bin/wasm-opt` |
 | Node | 22.22.3 | 기존 설치 |
 
 rustup 설치 시 선택된 stable 1.100.0도 `~/.rustup`에 있다. 양쪽 빌드에는 1.93.1을 사용했다. npm 0.9.1의 WASM `producers` 섹션에서도 rustc 1.93.1과 wasm-bindgen 0.2.127을 확인했다. npm 메타데이터의 `gitHead`와 태그의 커밋은 `981ce66b4183b13c1a3b5907e04a8969c8c42034`로 일치했다.
@@ -18,7 +18,7 @@ rustup 설치 시 선택된 stable 1.100.0도 `~/.rustup`에 있다. 양쪽 빌�
 ## 빌드와 크기
 
 - 기본은 공식 배포 명령 `python3 scripts/measure_render_diff_wasm.py --profile release --build-mode standard`와 포장 명령 `bash scripts/prepare-npm.sh`를 실행했다. 활성 feature는 `console_error_panic_hook`, `pdf-import`, `pdf-jbig2`, `pdf-jpeg2000`, `pdf-icc`, `wasm-api`다.
-- 경량은 `sh scripts/wasm-pack-locked.sh --target web --release --out-dir /private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/build-light-parallel/package --no-default-features --features wasm-api`로 빌드했다. 활성 feature는 `wasm-api`다. 이 실험은 태그 소스와 `Cargo.lock` 그대로 빌드했다.
+- 경량은 `sh scripts/wasm-pack-locked.sh --target web --release --out-dir <작업 폴더>/build-light-parallel/package --no-default-features --features wasm-api`로 빌드했다. 활성 feature는 `wasm-api`다. 이 실험은 태그 소스와 `Cargo.lock` 그대로 빌드했다.
 - 두 로컬 빌드에서 wasm-pack이 `wasm-opt`를 호출한 것을 로그로 확인했다. 옵션은 `-O`다. gzip은 최적화된 `rhwp_bg.wasm`에 `gzip -n -9`를 적용한 참고치다. npm 배포 파일의 빌드 중간 크기는 미측정이다.
 
 | 빌드 | 링커 원본 B | bindgen 후·wasm-opt 전 B | 배포 WASM B | gzip B | 16 MiB |
@@ -114,7 +114,7 @@ Node 비교에서 전체 API가 있는 경량판과 표본 40쪽의 SVG와 텍�
 
 ## 산출물
 
-경량 WASM과 JS 및 형식 선언 파일은 `/private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/build-light-parallel/package`에 있다.
+경량 WASM과 JS 및 형식 선언 파일은 `<작업 폴더>/build-light-parallel/package`에 있다.
 
 | 파일 | SHA-256 |
 | --- | --- |
@@ -123,12 +123,12 @@ Node 비교에서 전체 API가 있는 경량판과 표본 40쪽의 SVG와 텍�
 | rhwp_bg.wasm | `523289cd6a4c6c40d833f790e0cce3720c92e6b0cdc3a010ae07b0772ede122e` |
 | rhwp_bg.wasm.d.ts | `f247b1e62ca934386c334590515864dddf63170268518cb12ea964a461db3854` |
 
-- [크기·도구 호출·해시 원시 자료](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/measurements.json>)
-- [쪽별 SVG와 텍스트 비교표](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/comparison/pages.tsv>)
-- [쪽별 SHA-256 및 API 실행 결과](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/comparison/results.json>)
-- [기본 및 경량 출력 비교](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/compare-same-version/results.json>)
-- [로컬 기본 및 npm 게시판 비교](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/compare-published/results.json>)
-- [빌드 및 비교 재현 절차](</private/var/folders/rb/hf9xjqpj7817kthcc89jnm940000gn/T/tmp.oONAoJnmJ9/REPRODUCE.md>)
+- [크기·도구 호출·해시 원시 자료](<<작업 폴더>/measurements.json>)
+- [쪽별 SVG와 텍스트 비교표](<<작업 폴더>/comparison/pages.tsv>)
+- [쪽별 SHA-256 및 API 실행 결과](<<작업 폴더>/comparison/results.json>)
+- [기본 및 경량 출력 비교](<<작업 폴더>/compare-same-version/results.json>)
+- [로컬 기본 및 npm 게시판 비교](<<작업 폴더>/compare-published/results.json>)
+- [빌드 및 비교 재현 절차](<<작업 폴더>/REPRODUCE.md>)
 
 뷰어 실험판의 SHA-256
 

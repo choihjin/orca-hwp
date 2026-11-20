@@ -4,7 +4,7 @@
 
 ==============================================================================
 
-rhwp@0.8.7 (MIT)
+rhwp@0.8.7 (MIT), modified by this plugin as 0.8.7-p1: build/rhwp-patches/v0.8.7-tac-sibling-reset.diff
 https://registry.npmjs.org/@rhwp/core/-/core-0.8.7.tgz
 
 MIT License

@@ -1,0 +1,190 @@
+diff --git a/src/renderer/typeset.rs b/src/renderer/typeset.rs
+index cd5686327..7a79893f2 100755
+--- a/src/renderer/typeset.rs
++++ b/src/renderer/typeset.rs
+@@ -71,6 +71,58 @@ const ENDNOTE_PAGE_OFFCANVAS_GUARD_PX: f64 = 56.0;
+ ///
+ /// 정확히 절반인 문단까지 낱장 정책을 적용하면 기존 pile 문서의 다수 그림 흐름을
+ /// 불필요하게 페이지 단위로 분리한다. 두 장 이상이라는 #1995의 하한은 유지한다.
++/// 원본 저장 줄 사다리에서 글자 취급 컨트롤이 놓인 줄과, 같은 줄을 앞 글자 취급
++/// 컨트롤이 이미 차지했는지.
++///
++/// 한 문단에 글자 취급 표·도형 여럿이 줄마다 놓이면 줄 수와 컨트롤 수가 같지 않을 수
++/// 있다(한 줄에 도형 둘, 표와 도형 하나씩). 앞 컨트롤 수로 줄을 세면 다른 컨트롤의
++/// 줄 높이·쪽 리셋(vpos 0)을 이 컨트롤의 것으로 읽는다. 제어 슬롯 위치와 저장 줄의
++/// `text_start` 로 소속을 정한다([`crate::renderer::layout::control_line_seg_index`]).
++/// TAC 높이 상한(`tac_reconcile::measure`)이 같은 조건(원본 HWP5 저장 조판, 편집 전)에서
++/// 같은 해석기로 표 줄을 세므로, 흐름 전진과 쪽 리셋 판정도 그 줄을 따른다.
++/// 편집으로 줄 분할이 바뀌었거나 합성 줄이 있으면 쓰지 않는다.
++pub(crate) fn stored_inline_control_line(
++    para: &Paragraph,
++    ctrl_idx: usize,
++    profile: crate::model::provenance::LayoutCompatibilityProfile,
++) -> Option<(usize, bool)> {
++    if !profile.hwp5_stored_pagination_layout()
++        || profile.session_edited()
++        || para.stored_text_partition_is_dirty()
++        || para.cell_format_vpos_dirty
++        || para.line_segs.len() < 2
++        || para
++            .line_segs
++            .iter()
++            .any(|seg| seg.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0)
++    {
++        return None;
++    }
++    let inline = |control: &Control| match control {
++        Control::Table(table) => table.common.treat_as_char,
++        Control::Picture(picture) => picture.common.treat_as_char,
++        Control::Shape(shape) => shape.common().treat_as_char,
++        Control::Equation(equation) => equation.common.treat_as_char,
++        _ => false,
++    };
++    if !inline(para.controls.get(ctrl_idx)?) {
++        return None;
++    }
++    let line = crate::renderer::layout::control_line_seg_index(para, ctrl_idx)?;
++    if line >= para.line_segs.len() {
++        return None;
++    }
++    let shared_with_earlier =
++        para.controls[..ctrl_idx]
++            .iter()
++            .enumerate()
++            .any(|(index, control)| {
++                inline(control)
++                    && crate::renderer::layout::control_line_seg_index(para, index) == Some(line)
++            });
++    Some((line, shared_with_earlier))
++}
++
+ fn has_majority_fullpage_images(fullpage_count: usize, noninline_picture_count: usize) -> bool {
+     fullpage_count >= 2 && fullpage_count.saturating_mul(2) > noninline_picture_count
+ }
+@@ -4099,7 +4151,13 @@ impl TypesetEngine {
+                 })
+                 .and_then(|t| self.tac_table_line_index(para, t, fmt))
+                 .unwrap_or(0);
+-            leading_offset + prior_tac
++            // 글자 취급 도형·그림도 자기 저장 줄을 가진다. 표만 세면 앞 도형 수만큼 다른
++            // 컨트롤의 줄(높이·vpos 리셋)을 이 표의 것으로 읽는다. 저장 줄 소속을 정할 수
++            // 있고 그 줄을 이 표가 처음 차지하면 그 줄을 쓴다.
++            stored_inline_control_line(para, ctrl_idx, st.profile)
++                .filter(|(_, shared)| !shared)
++                .map(|(line, _)| line)
++                .unwrap_or(leading_offset + prior_tac)
+         } else {
+             tac_table_line_idx.unwrap_or(0)
+         };
+diff --git a/src/renderer/typeset/controls.rs b/src/renderer/typeset/controls.rs
+index c880df2d7..6567d067f 100644
+--- a/src/renderer/typeset/controls.rs
++++ b/src/renderer/typeset/controls.rs
+@@ -144,8 +144,10 @@ pub(super) fn prepare_table_control(
+     if table_entry::needs_stored_line_advance(
+         para,
+         table,
++        ctrl_idx,
+         order_pos,
+         st.table_control_page().has_items,
++        st.profile,
+         dpi,
+     ) {
+         st.advance_column_or_new_page();
+@@ -318,7 +320,7 @@ pub(super) fn place_table_host_shape(
+     if st.has_spilled_page_tail_float(para_idx, ctrl_idx) {
+         return;
+     }
+-    let flow = shape_flow::prepare(ctrl, para, ctrl_idx, dpi);
++    let flow = shape_flow::prepare(ctrl, para, ctrl_idx, st.profile, dpi);
+     if flow.needs_advance(st.table_host_shape_page(), || st.available_height()) {
+         st.advance_column_or_new_page();
+     }
+diff --git a/src/renderer/typeset/controls/shape_flow.rs b/src/renderer/typeset/controls/shape_flow.rs
+index 3ea381a54..aa272e5ac 100644
+--- a/src/renderer/typeset/controls/shape_flow.rs
++++ b/src/renderer/typeset/controls/shape_flow.rs
+@@ -18,6 +18,7 @@ pub(super) fn prepare(
+     ctrl: &Control,
+     para: &Paragraph,
+     ctrl_idx: usize,
++    profile: crate::model::provenance::LayoutCompatibilityProfile,
+     dpi: f64,
+ ) -> TableHostShapeFlow {
+     // Task #402: 같은 paragraph의 선행 TAC 컨트롤이 있는 TAC 그림은
+@@ -43,7 +44,16 @@ pub(super) fn prepare(
+         if prior_tac_count == 0 {
+             return None;
+         }
+-        para.line_segs.get(prior_tac_count).map(|seg| {
++        // 저장 줄 소속을 정할 수 있으면 그 줄을 쓴다(TAC 높이 상한 `tac_reconcile` 과 같은
++        // 해석). 앞 컨트롤이 이미 차지한 줄은 그 컨트롤이 소비했으므로 다시 쌓지 않는다
++        // (한 줄에 도형 둘).
++        let line =
++            match crate::renderer::typeset::stored_inline_control_line(para, ctrl_idx, profile) {
++                Some((_, true)) => return None,
++                Some((line, false)) => line,
++                None => prior_tac_count,
++            };
++        para.line_segs.get(line).map(|seg| {
+             let lh = hwpunit_to_px(seg.line_height, dpi);
+             let ls_extra = if seg.line_spacing > 0 {
+                 hwpunit_to_px(seg.line_spacing, dpi)
+diff --git a/src/renderer/typeset/controls/table_entry.rs b/src/renderer/typeset/controls/table_entry.rs
+index 606e964b0..e5acf7167 100644
+--- a/src/renderer/typeset/controls/table_entry.rs
++++ b/src/renderer/typeset/controls/table_entry.rs
+@@ -16,8 +16,10 @@ pub(in crate::renderer::typeset) struct TableControlPage {
+ pub(super) fn needs_stored_line_advance(
+     para: &Paragraph,
+     table: &Table,
++    ctrl_idx: usize,
+     order_pos: usize,
+     has_items: bool,
++    profile: crate::model::provenance::LayoutCompatibilityProfile,
+     dpi: f64,
+ ) -> bool {
+     // [#2287 후속/1.hwpx p58] 문단 **내부** 저장 vpos 리셋 경계:
+@@ -31,6 +33,23 @@ pub(super) fn needs_stored_line_advance(
+     // TAC 표의 소속 줄 판정은 place_table_with_text 의 표 줄 매칭
+     // (lh ≈ 표높이+outer margins)과 동일식.
+     if order_pos > 0 && table.common.treat_as_char && has_items {
++        // 저장 줄 소속을 정할 수 있는 표는 자기 줄만 본다. 높이가 같은 다른 표가 쪽 리셋
++        // 줄을 가졌다는 사실은 이 표가 다음 쪽에서 시작한다는 근거가 아니다. 높이만
++        // 비교하면 리셋 줄과 높이가 같은 형제 표가 모두 표마다 새 쪽을 연다.
++        if let Some((owner, _)) =
++            crate::renderer::typeset::stored_inline_control_line(para, ctrl_idx, profile)
++        {
++            let (before, line) = (
++                &para.line_segs[owner.saturating_sub(1)],
++                &para.line_segs[owner],
++            );
++            return owner > 0
++                && (before.tag | line.tag)
++                    & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
++                    == 0
++                && line.vertical_pos <= 0
++                && before.vertical_pos > 5000;
++        }
+         let tbl_line_h = hwpunit_to_px(
+             table.common.height as i32
+                 + table.outer_margin_top as i32
+diff --git a/src/renderer/typeset/controls/tac_reconcile.rs b/src/renderer/typeset/controls/tac_reconcile.rs
+index 813ae0ad0..1d1e129c4 100644
+--- a/src/renderer/typeset/controls/tac_reconcile.rs
++++ b/src/renderer/typeset/controls/tac_reconcile.rs
+@@ -123,7 +123,13 @@ pub(super) fn measure(
+         if prior_tac_count == 0 {
+             continue;
+         }
+-        if let Some(seg) = para.line_segs.get(prior_tac_count) {
++        // Task #402(`shape_flow::prepare`)와 같은 줄을 센다.
++        let line = match crate::renderer::typeset::stored_inline_control_line(para, ci, profile) {
++            Some((_, true)) => continue,
++            Some((line, false)) => line,
++            None => prior_tac_count,
++        };
++        if let Some(seg) = para.line_segs.get(line) {
+             let lh = hwpunit_to_px(seg.line_height, dpi);
+             let ls_extra = if seg.line_spacing > 0 {
+                 hwpunit_to_px(seg.line_spacing, dpi)

@@ -1,5 +1,7 @@
 # HWP Viewer for Orca
 
+<img src="assets/cover.png" alt="HWP Viewer 아이콘과 이름, 표가 많은 공문서와 383쪽 편람 표지를 연 뷰어 화면" width="800">
+
 [Orca](https://github.com/stablyai/orca) 안에서 한글 문서(`.hwpx`, `.hwp`)를 쪽 단위로 열어 보는 읽기 전용 뷰어입니다. 사람뿐 아니라 Orca의 에이전트도 같은 화면을 PNG로 받아 문서가 어떻게 보이는지 확인할 수 있습니다.
 
 [English](README.md)
@@ -17,6 +19,31 @@
 - rhwp가 그린 화면이라 한글 프로그램과 다를 수 있습니다. 쪽을 넘는 복잡한 표가 있는 문서에서 줄바꿈·쪽 나눔이 달라지는 경우를 확인했습니다([결정 기록](docs/decisions/2026-11-19-phase2-integration.md)).
 - 편집·저장, 인쇄, 문서 안 검색은 아직 없습니다.
 - Orca 데스크톱 앱 전용입니다. 브라우저 클라이언트(`orca serve`)에서는 열리지 않습니다.
+
+## 화면
+
+표가 많은 공문서를 쪽 그대로 보여 줍니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/table-dark.png">
+  <img src="assets/screenshots/table-light.png" alt="표가 많은 공개 공문서를 쪽 단위로 그린 뷰어 화면" width="800">
+</picture>
+
+수백 쪽 문서도 보이는 쪽부터 그려 첫 쪽이 바로 나옵니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/large-dark.png">
+  <img src="assets/screenshots/large-light.png" alt="383쪽 HWPX 업무 편람의 표지를 연 뷰어 화면" width="800">
+</picture>
+
+에이전트는 같은 엔진으로 원하는 쪽·영역을 PNG와 텍스트로 받습니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/agent-dark.png">
+  <img src="assets/screenshots/agent-light.png" alt="agent-view 명령과 그 명령이 쪽 영역을 확대해 그린 PNG" width="800">
+</picture>
+
+그림은 모두 공개 표본 문서로 만들었습니다(`assets/src/`).
 
 ## 설치
 

@@ -1,36 +1,28 @@
 # 계획
 
-2026-11-19에 골격을 만들었다. 아래에서 "확인 필요"는 아직 원문이나 실행으로 확인하지 않은 것이다.
+2026-11-19에 골격을 만들고, 같은 날부터 2026-11-20까지 0.1.0(읽기 전용 뷰어)을 구현했다. 자세한 근거는 [설계](superpowers/specs/2026-11-19-hwp-viewer-design.md), [구현 계획](superpowers/plans/2026-11-19-hwp-viewer.md), [결정 기록](decisions/)에 있다.
 
 ## 왜 만드나
 
-- Orca 공식 카탈로그와 커뮤니티 카탈로그에 한글 문서 플러그인이 없다 (2026-11-19 확인: `stablyai/orca-plugins` 플러그인 43개와 두 카탈로그 파일에 hwp·hangul·hancom 언급 0건, `stablyai/orca-community-plugins`는 플러그인 폴더 0개)
-- 공식 카탈로그에는 같은 방식의 문서 뷰어가 있다: `docx`(Word Preview), `spreadsheet`. 둘 다 `customEditors` + `contentKind: "bytes"` + `editor/index.html` + `build/` + `THIRD_PARTY_NOTICES.txt` 구조다. 참고 구현으로 본다
+- Orca 공식 카탈로그와 커뮤니티 카탈로그에 한글 문서 플러그인이 없다 (2026-11-19 확인: `stablyai/orca-plugins` 플러그인 43개와 두 카탈로그 파일에 hwp·hangul·hancom 언급 0건, `stablyai/orca-community-plugins`는 플러그인 폴더 0개).
+- 사람뿐 아니라 Orca 에이전트도 문서가 실제로 어떻게 보이는지 보고 "어떻게 고쳐야 하는지" 판단할 수 있어야 한다(사용자 요구).
 
-## 지금 있는 것
+## 지금 있는 것 (0.1.0)
 
-- 매니페스트: `.hwpx`, `.hwp`의 custom editor 하나, `execution: sandboxed-ui`, `contentKind: bytes`, 권한(capabilities) 없음
-- `editor/main.ts`: 바이트를 받아 파일 종류와 크기만 표시
-- `editor/format.ts`: 매직 바이트로 종류 판별 (ZIP이면 hwpx, OLE 복합 파일이면 hwp)
-- `orca plugin validate .` 통과, `orca plugin test .` 4개 통과 (2026-11-19). `tsc` 타입 검사는 돌리지 않았다
+- `.hwp`(5.x)와 `.hwpx`를 rhwp 0.8.7(npm 배포물, 해시 고정)로 쪽마다 SVG로 그려 정화한 뒤 인라인으로 보여 준다. 보이는 쪽부터 그리고, 문서별로 마지막 쪽과 확대를 기억한다.
+- 한글 본문용 OFL 글꼴 13개(12.6 MB)를 싣는다. 함초롬체는 사용권상 싣지 않는다.
+- 에이전트 경로 두 가지: `orca plugin shot`으로 사용자가 보는 쪽 캡처, 플러그인에 함께 실린 `agent/agent-view.mjs`로 아무 쪽·영역의 PNG와 텍스트(오프라인, node_modules 없이).
+- 권한 없음, 네트워크 없음. 플러그인 크기 약 31 MB(상한 50 MiB).
+- 검증: `orca plugin test` 111개, 타입 검사, 합격 검사 7/7(기준 PDF 표본 4개의 쪽 수 일치, 큰 문서 205쪽·383쪽 포함, 알려진 엔진 차이 2건), 최종 리뷰 세 차례의 important 지적 모두 수정, 설치본에서 뷰어와 에이전트 스크립트 확인.
 
-## 범위
+## 정한 것
 
-- 1차: `.hwpx` 읽기 전용 뷰어. 문단 텍스트 → 표 → 그림 → 글자·문단 모양
-- 뒤로 미룸: `.hwp` 5.x 바이너리, 편집, 인쇄·PDF 내보내기, 검색
-
-## 확인 필요
-
-- `.hwpx` 구조: ZIP 안에 본문이 `Contents/section0.xml` 같은 XML로 들어 있다는 것까지는 다른 작업에서 봤다. 표준 문서(OWPML, KS X 6101) 원문으로 요소 이름과 단위를 확인한다
-- `.hwp` 5.x: OLE 복합 파일 안의 스트림이 압축된 레코드 구조라고 알고 있다. 한글과컴퓨터가 공개한 형식 문서의 이용 조건(저작권 고지 문구 등)을 확인한다
-- 쓸 수 있는 라이브러리: 브라우저에서 도는 ZIP 해제와 HWP·HWPX 파서 후보를 찾고, 각각 라이선스·유지 상태·번들 크기를 확인한다. 후보 이름은 확인 전이라 적지 않는다
-- 샌드박스 프레임 제약: 문서 크기 한도, 동적 `import` 가능 여부, 그림(바이너리 데이터) 표시 방법, 글꼴 대체
-- 공식 `docx` 플러그인이 빌드 산출물을 넣는 방식(`build/`)과 서드파티 고지 파일 형식
-- 시험용 문서: 공개해도 되는 `.hwpx`·`.hwp` 표본 (회사 문서는 저장소에 넣지 않는다)
+- 엔진: rhwp 0.8.7(V1). 0.9.1은 PDF 기능을 빼도 WASM이 19 MB라 Orca의 파일당 16 MiB 상한을 넘고, 뷰어 API만 남긴 판(13.9 MB)은 편집 API가 빠진다. 표본 비교에서 0.9.1이 더 낫다고 할 수 없었다. 다시 빌드하는 절차는 [rhwp-091-viewer-build](decisions/rhwp-091-viewer-build/REPRODUCE.md).
+- 파서 직접 작성안(이 문서의 처음 계획: `.hwpx` 문단 텍스트부터)은 기각했다. HWP 바이너리와 쪽 단위 시각 재현을 모두 새로 만들어야 하기 때문이다.
 
 ## 다음 작업
 
-1. 위 "확인 필요"를 조사하고 결정 기록으로 남긴다
-2. `.hwpx`에서 문단 텍스트를 뽑아 보여 주는 최소 뷰어
-3. 공개 표본으로 테스트 추가
-4. 아이콘·표지·스크린샷, 영문·한글 README 다듬기 → GitHub 공개 여부 결정
+1. Orca 화면에서 직접 확인: 키 조작, ⓘ 정보 화면, 다시 열 때 기억한 쪽으로 가는지(지금은 테스트로만 확인).
+2. 공개: GitHub 저장소, 아이콘·표지·스크린샷, Orca 카탈로그 등록 여부 결정.
+3. 남은 문제: 결정 기록의 미해결 nit, 큰 문서 메모리·macOS 밖 동작 측정, 여러 쪽 문서 안의 빈 쪽 표시.
+4. 수정 기능(별도 설계): rhwp 0.8.7의 `exportHwp`/`exportHwpx`와 `orca.document.session().change`로 이어 간다.

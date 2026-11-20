@@ -6,7 +6,7 @@ A read-only, page-by-page viewer for Hangul word processor documents (`.hwpx`, `
 
 [한국어](README.ko.md)
 
-## Status (0.1.0, 2026-11-20)
+## Status (0.1.1, 2026-11-20)
 
 - Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine plus a pagination patch (our own build, `0.8.7-p1`; it fixes a page per table when one paragraph holds many inline tables and text boxes, see the [decision record](docs/decisions/2026-11-20-rhwp-tac-pagination-patch.md), Korean), including tables, images, headers and footers, and mixed portrait and landscape pages.
 - Draws the visible pages first and the rest as you scroll, so the first page of a document with hundreds of pages appears right away.

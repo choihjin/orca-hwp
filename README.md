@@ -20,10 +20,10 @@ Limits:
 
 ## Install
 
-It is not in an Orca catalog yet. Install it from a checkout of this repository:
+It is not in an Orca catalog yet. Install it from GitHub:
 
 ```sh
-orca plugin install /path/to/orca-hwp
+orca plugin install choihjin/orca-hwp
 ```
 
 When Orca prints an approval fingerprint, check what it grants (no capabilities, an editor for `.hwp` and `.hwpx`) and run the command again with `--approve <fingerprint>`. Requires Orca 1.4.248 or later.

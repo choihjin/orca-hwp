@@ -20,10 +20,10 @@
 
 ## 설치
 
-아직 Orca 카탈로그에 올리지 않았습니다. 이 저장소를 받은 폴더에서 설치합니다.
+아직 Orca 카탈로그에는 올리지 않았습니다. GitHub에서 바로 설치합니다.
 
 ```sh
-orca plugin install /path/to/orca-hwp
+orca plugin install choihjin/orca-hwp
 ```
 
 Orca가 승인 지문을 보여 주면 내용(권한 없음, `.hwp`·`.hwpx` 편집기)을 확인한 뒤 `--approve <지문>`을 붙여 다시 실행합니다. Orca 1.4.248 이상이 필요합니다.

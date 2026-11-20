@@ -70,10 +70,20 @@ Orca에서 `.hwp`·`.hwpx` 파일을 열면 뷰어가 열립니다.
 
 ## 에이전트로 문서 읽기
 
-에이전트에게 [한글 문서 확인 안내](docs/AGENTS.md)를 알려 주세요. 에이전트는 두 가지를 할 수 있습니다.
+플러그인은 에이전트에게 도구를 자동으로 붙이지 못합니다(Orca의 플러그인 스킬 기능이 아직 열리지 않음). 대신 이 저장소의 스킬을 한 번 설치해 두면, Claude Code나 Codex에게 "이 hwp가 어떻게 보이는지 봐 줘"라고만 해도 에이전트가 알아서 확인합니다.
+
+```sh
+git clone https://github.com/choihjin/orca-hwp && cd orca-hwp
+cp -R skills/hwp-viewer ~/.claude/skills/   # Claude Code (Orca의 Claude 포함)
+cp -R skills/hwp-viewer ~/.codex/skills/    # Codex (Orca의 Codex 포함)
+```
+
+스킬이 하는 일:
 
 - `orca plugin shot`으로 사용자가 보고 있는 쪽을 캡처합니다.
-- 플러그인에 함께 실린 `agent/agent-view.mjs`로 아무 쪽이나 영역을 PNG로 그리고 쪽 텍스트를 받습니다. 어느 프로젝트에서든 오프라인으로 동작하며 Node.js 22 이상이 필요합니다.
+- 플러그인에 함께 실린 `agent/agent-view.mjs`로 아무 쪽이나 영역을 PNG로 그리고 쪽 텍스트(표 칸 포함)를 받습니다. 어느 프로젝트에서든 오프라인으로 동작하며 Node.js 22 이상이 필요합니다.
+
+스킬 없이 쓰려면 에이전트에게 [한글 문서 확인 안내](docs/AGENTS.md)를 알려 주세요.
 
 ## 개발
 

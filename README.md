@@ -70,10 +70,20 @@ The status bar at the top shows the format, current page, zoom and engine versio
 
 ## Read documents with an agent
 
-Point your agent at the [HWP viewing guide](docs/AGENTS.md) (Korean). An agent can:
+A plugin cannot give agents tools by itself yet (Orca's plugin skills are not open). Install this repository's skill once, and Claude Code or Codex will check a document on their own when you ask how a `.hwp` looks.
 
-- capture the page you are viewing with `orca plugin shot`;
-- render any page or region as a PNG and get the page text with `agent/agent-view.mjs`, which ships with the plugin. It works offline from any project and needs Node.js 22 or later.
+```sh
+git clone https://github.com/choihjin/orca-hwp && cd orca-hwp
+cp -R skills/hwp-viewer ~/.claude/skills/   # Claude Code (including Claude in Orca)
+cp -R skills/hwp-viewer ~/.codex/skills/    # Codex (including Codex in Orca)
+```
+
+The skill:
+
+- captures the page you are viewing with `orca plugin shot`;
+- renders any page or region as a PNG and gets the page text (table cells included) with `agent/agent-view.mjs`, which ships with the plugin. It works offline from any project and needs Node.js 22 or later.
+
+Without the skill, point your agent at the [HWP viewing guide](docs/AGENTS.md) (Korean).
 
 ## Develop
 

@@ -7,7 +7,14 @@
   "scripts": {
     "test": "orca plugin test .",
     "typecheck": "orca plugin types . && tsc --noEmit",
-    "validate": "orca plugin validate ."
+    "validate": "orca plugin validate .",
+    "vendor:rhwp": "node build/vendor-rhwp.mjs",
+    "vendor:fonts": "node build/vendor-fonts.mjs",
+    "vendor:resvg": "node build/vendor-resvg.mjs",
+    "notices": "node build/notices.mjs",
+    "check:size": "node build/check-size.mjs",
+    "fixtures": "node scripts/fetch-fixtures.mjs",
+    "acceptance": "node scripts/acceptance.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

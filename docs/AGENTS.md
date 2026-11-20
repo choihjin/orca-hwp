@@ -1,6 +1,9 @@
 # 에이전트가 HWP 문서를 확인하는 방법
 
-사용자가 에이전트에게 이 문서를 알려 주면 아래 명령으로 `.hwp`와 `.hwpx`를 확인할 수 있습니다. 같은 내용을 스킬로 묶은 것이 저장소의 `skills/hwp-viewer/`이며, 플러그인 폴더를 찾아 주는 `scripts/hwp-view.sh`가 들어 있습니다.
+사용자가 에이전트에게 이 문서를 알려 주면 아래 명령으로 `.hwp`와 `.hwpx`를 확인할 수 있습니다. 같은 내용을 스킬로 묶은 것이 저장소의 `skills/hwp-viewer/`이며, 렌더러를 찾아 주는 `scripts/hwp-view.sh`가 들어 있습니다.
+
+- Orca 데스크톱 앱이 있으면 1번(캡처)과 3번(렌더링)을 모두 쓸 수 있습니다.
+- 화면 없는 Orca(서버 런타임)나 Orca가 없는 기계에서는 1번이 안 됩니다. 2번의 "Orca 없이"대로 렌더러를 받아 3번을 쓰세요.
 
 ## 1. 사용자가 보는 쪽 캡처
 
@@ -9,6 +12,8 @@ orca plugin shot "$PLUGIN_KEY" --editor "$HWP_FILE" --width 1000 --height 1400 -
 ```
 
 `PLUGIN_KEY`에는 플러그인 키를, `HWP_FILE`에는 문서 경로를 넣습니다. JSON의 `path`에 있는 PNG를 열고 화면 상단에서 현재 쪽과 전체 쪽 수를 확인하세요. 뷰어는 문서별로 마지막에 본 쪽과 확대를 기억합니다.
+
+Orca 데스크톱 앱에서만 됩니다. 화면 없는 서버 런타임은 `Plugin service is not available on this runtime`으로 거부합니다. 그때는 3번으로 원하는 쪽을 직접 렌더링하세요.
 
 ## 2. 플러그인 폴더 찾기
 
@@ -27,9 +32,20 @@ orca plugin list --json
 PLUGIN_DIR="$HOME/Library/Application Support/orca/plugins/$PLUGIN_KEY/$CONTENT_HASH"
 ```
 
+### Orca 없이
+
+렌더러는 저장소에 그대로 들어 있습니다. 릴리스 태그를 받아 그 폴더를 `PLUGIN_DIR`로 쓰면 됩니다. 커밋된 WASM이 플러그인과 같은 빌드인지는 `build/pins.json`의 `rhwp.patched` 해시와 비교해 확인할 수 있습니다.
+
+```sh
+git clone --depth 1 --branch v0.1.1 https://github.com/choihjin/orca-hwp
+PLUGIN_DIR="$PWD/orca-hwp"
+```
+
+스킬의 `scripts/hwp-view.sh --fetch`는 가장 새 태그를 `~/.cache/orca-hwp`에 받아 두고, 이후 실행에서 그 사본을 씁니다.
+
 ## 3. 아무 쪽이나 원하는 영역 렌더링
 
-Node.js 22 이상이 필요합니다. Node.js가 없는 환경에서는 1번의 Orca 캡처를 쓰세요. 스크립트는 플러그인 폴더에 포함된 렌더러와 글꼴로 오프라인에서 동작합니다.
+Node.js 22 이상이 필요합니다. Node.js가 없는 환경에서는 1번의 Orca 캡처를 쓰세요. 스크립트는 플러그인 폴더에 포함된 렌더러와 글꼴로 오프라인에서 동작하며 Orca가 없어도 됩니다.
 
 ```sh
 node "$PLUGIN_DIR/agent/agent-view.mjs" "$HWP_FILE" --page 3 --text --json

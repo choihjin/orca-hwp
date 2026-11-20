@@ -2,7 +2,7 @@
 name: hwp-viewer
 skill_type: product-verification
 category: Documents
-description: Use when the user asks how a .hwp or .hwpx (Hangul/한글) document actually looks, whether its tables or page breaks render correctly, or wants a page of it read or checked — renders the page with the installed Orca HWP Viewer plugin (choihjin.hwp-viewer) as PNG and text, offline, instead of guessing from raw bytes or text extraction
+description: Use when the user asks how a .hwp or .hwpx (Hangul/한글) document actually looks, whether its tables or page breaks render correctly, or wants a page of it read or checked — renders the page with the Orca HWP Viewer plugin's engine (choihjin.hwp-viewer; the copy installed in Orca, or one fetched on servers and headless Orca) as PNG and text, offline, instead of guessing from raw bytes or text extraction
 ---
 
 # HWP Viewer (Orca)
@@ -23,14 +23,23 @@ H="<이 스킬 폴더>/scripts/hwp-view.sh"
 "$H" 문서.hwp --json                     # 쪽 수·쪽 크기 먼저 (pageCount, pageSize)
 "$H" 문서.hwp --page 28 --text --json    # 28쪽 PNG(json.png) + 줄 단위 텍스트
 "$H" 문서.hwp --page 28 --region 80,200,450,240 --scale 3 --json   # 작은 표 확대
-"$H" --shot 문서.hwp                     # 사용자가 Orca에서 보던 쪽 그대로 캡처
+"$H" --shot 문서.hwp                     # 사용자가 Orca에서 보던 쪽 그대로 캡처(데스크톱만)
+"$H" --fetch                             # Orca 데스크톱이 없는 기계: 렌더러를 캐시에 한 번 받기(네트워크)
 ```
 
 PNG는 반드시 이미지로 열어 본다(json의 `png`). 맨 위가 아닌 쪽 전체가 보이는지, 빈 화면이 아닌지 확인.
 
 ## Gotchas
 
-**설치 안 됐거나 개발 로드면 스크립트가 멈춤** — `HWP Viewer is not installed`면 사용자에게 `orca plugin install choihjin/orca-hwp`를 안내. 개발 로드(`isDev`)면 경로를 모르므로 `HWP_VIEWER_DIR=<체크아웃 폴더>`를 준다.
+**화면 없는 Orca(서버 런타임)에서는 `--shot`이 안 됨** — `orca plugin shot`이 `Plugin service is not available on this runtime`으로 거부한다(서버의 에이전트가 실제로 겪음). 쪽 렌더는 Orca 없이 돈다.
+```bash
+# ❌ 서버에서 사용자 화면 캡처를 시도
+"$H" --shot 문서.hwp
+# ✅ 렌더러를 한 번 받아 두고 원하는 쪽을 직접 렌더
+"$H" --fetch && "$H" 문서.hwp --page 1 --json
+```
+
+**렌더러를 못 찾으면 스크립트가 멈춤(`renderer not found`)** — 찾는 순서는 `HWP_VIEWER_DIR` → Orca 설치본 → 스크립트가 든 저장소 체크아웃 → 캐시(`~/.cache/orca-hwp`). 데스크톱이면 사용자에게 `orca plugin install choihjin/orca-hwp`를 안내하고, 서버면 `--fetch`를 쓴다. 개발 로드(`isDev`)는 경로를 모르므로 `HWP_VIEWER_DIR=<체크아웃 폴더>`를 준다. 캐시 사본은 받은 태그에 고정되므로, 새 릴리스가 나오면 `--fetch`를 다시 실행한다. JSON의 `engine.version`으로 버전을 확인한다.
 
 **`orca plugin shot --act`(키 입력)는 Orca 창이 보이면 거절** — `invalid_argument: needs Orca's window hidden or minimized`. 쪽 넘기기를 shot으로 하지 말 것.
 ```bash
@@ -77,6 +86,6 @@ args=(--page 3 --region 100,410,640,108); "$H" 문서.hwp "${args[@]}"
 
 ## Resources
 
-- `scripts/hwp-view.sh` — 플러그인 폴더를 찾아 `agent/agent-view.mjs` 실행, `--shot`, `--plugin-dir`
+- `scripts/hwp-view.sh` — 렌더러를 찾아 `agent/agent-view.mjs` 실행, `--shot`, `--plugin-dir`, `--fetch [vX.Y.Z]`
 - `references/agent-view.md` — 옵션·JSON 출력·오류 코드
 - 플러그인 저장소: https://github.com/choihjin/orca-hwp (`docs/AGENTS.md`)

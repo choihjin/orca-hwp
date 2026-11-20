@@ -82,6 +82,7 @@ cp -R skills/hwp-viewer ~/.codex/skills/    # Codex (Orca의 Codex 포함)
 
 - `orca plugin shot`으로 사용자가 보고 있는 쪽을 캡처합니다.
 - 플러그인에 함께 실린 `agent/agent-view.mjs`로 아무 쪽이나 영역을 PNG로 그리고 쪽 텍스트(표 칸 포함)를 받습니다. 어느 프로젝트에서든 오프라인으로 동작하며 Node.js 22 이상이 필요합니다.
+- 서버에서도 씁니다. 화면 없는 Orca(`orca serve`)는 플러그인 캡처를 거부하고, Orca가 아예 없는 기계도 있습니다. 그런 곳에서는 `skills/hwp-viewer/scripts/hwp-view.sh --fetch`로 최신 릴리스를 `~/.cache/orca-hwp`에 한 번 받아 두면 쪽 렌더링이 위와 같이 동작합니다.
 
 스킬 없이 쓰려면 에이전트에게 [한글 문서 확인 안내](docs/AGENTS.md)를 알려 주세요.
 

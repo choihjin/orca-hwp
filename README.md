@@ -82,6 +82,7 @@ The skill:
 
 - captures the page you are viewing with `orca plugin shot`;
 - renders any page or region as a PNG and gets the page text (table cells included) with `agent/agent-view.mjs`, which ships with the plugin. It works offline from any project and needs Node.js 22 or later.
+- works on servers too. Headless Orca (`orca serve`) refuses plugin shots, and some machines have no Orca at all. There, `skills/hwp-viewer/scripts/hwp-view.sh --fetch` downloads the newest release into `~/.cache/orca-hwp` once, and page rendering then works as above.
 
 Without the skill, point your agent at the [HWP viewing guide](docs/AGENTS.md) (Korean).
 

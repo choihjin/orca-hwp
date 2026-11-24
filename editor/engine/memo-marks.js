@@ -1,5 +1,6 @@
 // Where a memo's text is on a page: threads and the page's layout runs in, rectangles in page px
 // out. The frame viewer and agent/memo-overlay.js both draw them. Plain ESM, no DOM, no engine.
+import { TEXT_LIMIT } from './memo-threads.js'
 
 /** @typedef {import('./memo-threads.js').MemoThread} MemoThread */
 /** @typedef {import('./memo-threads.js').MemoCaret} MemoCaret */
@@ -92,24 +93,26 @@ function paragraphCopies({ anchor }, runs) {
 /** @typedef {{ run: AnchorRun, from: number, to: number, text: string }} Part */
 
 /**
- * The memo's characters as the file has them, the position of the first, and the position the memo
- * begins at past blanks.
+ * The memo's characters as the file has them, the layout position of the first, and the layout
+ * position the memo begins at past blanks.
  * @typedef {{ chars: string[], from: number, start: number }} Wanted
  */
 
 /**
- * What a copy has of the memo: its characters, or only a place for the number.
- * @typedef {{ pieces: Piece[], parts: Part[], spot: { x: number, y: number } | null }} Find
+ * What a copy has of the memo: its characters, or only a place for the number. `used` are the
+ * pieces these are in.
+ * @typedef {{ pieces: Piece[], used: Piece[], parts: Part[], spot: { x: number, y: number } | null }} Find
  */
 
 /**
  * @param {MemoThread} thread
  * @param {Piece[]} pieces one copy
- * @param {number} start
- * @param {number} end
+ * @param {number} start layout position
+ * @param {number} end layout position
+ * @param {number} inlineBefore
  * @returns {Find | null}
  */
-function findIn(thread, pieces, start, end) {
+function findIn(thread, pieces, start, end, inlineBefore) {
   const parts = pieces
     .map(({ run, chars }) => {
       const from = Math.max(start - run.charStart, 0)
@@ -118,16 +121,17 @@ function findIn(thread, pieces, start, end) {
     })
     .filter((part) => part.from < part.to)
     .sort((a, b) => a.run.charStart - b.run.charStart)
-  if (parts.length > 0) return { pieces, parts, spot: null }
+  if (parts.length > 0) return { pieces, used: pieces.filter(({ run }) => parts.some((part) => part.run === run)), parts, spot: null }
   // Nothing to highlight, so only a number. It belongs where a character begins; behind the last
   // character only when no character follows it there, or the next line would show it as well.
   const paragraph = Array.from(thread.paragraphText)
-  if (thread.multiParagraph ? start < paragraph.length : start !== end) return null
-  const lineEnds = paragraph[start] === undefined || paragraph[start] === '\n'
+  if (thread.multiParagraph ? start - inlineBefore < paragraph.length : start !== end) return null
+  const follows = paragraph[start - inlineBefore]
+  const lineEnds = follows === undefined || follows === '\n'
   const at =
     pieces.find((piece) => piece.run.charStart <= start && start < endOf(piece)) ??
     pieces.filter((piece) => lineEnds && start === endOf(piece)).at(-1)
-  return at ? { pieces, parts, spot: { x: at.run.x + at.run.charX[start - at.run.charStart], y: at.run.y } } : null
+  return at ? { pieces, used: [at], parts, spot: { x: at.run.x + at.run.charX[start - at.run.charStart], y: at.run.y } } : null
 }
 
 /**
@@ -221,6 +225,38 @@ function sharePlace(a, b) {
 }
 
 /**
+ * Whether the paragraph's text has the piece at this position.
+ * @param {string[]} paragraph
+ * @param {Piece} piece
+ * @param {number} at
+ */
+const isAt = (paragraph, { chars }, at) => at >= 0 && chars.every((char, i) => paragraph[at + i] === char)
+
+/**
+ * Whether the layout's positions are the paragraph's, off by `inlineBefore`. The layout does count
+ * inline objects, but by lines: those of earlier lines mostly not, in a text box even a later one of
+ * the line. Inside cells and after a line break the caret follows the layout, so it is no proof.
+ * Behind an object, and in a text box whose paragraph is not all at its place, the text of each piece
+ * has to be at its place and nowhere else in the paragraph.
+ * @param {MemoThread} thread
+ * @param {Find} find
+ * @param {number} inlineBefore
+ */
+function isInPlace(thread, { pieces, used }, inlineBefore) {
+  if (inlineBefore === 0 && thread.place !== 'textBox') return true
+  const paragraph = Array.from(thread.paragraphText)
+  if (inlineBefore === 0) {
+    const settled = pieces.every((piece) => endOf(piece) > TEXT_LIMIT || isAt(paragraph, piece, piece.run.charStart))
+    if (settled) return true
+  }
+  if (paragraph.length >= TEXT_LIMIT) return false
+  return used.every((piece) => {
+    const places = paragraph.flatMap((_, at) => (isAt(paragraph, piece, at) ? at : []))
+    return places.length === 1 && places[0] === piece.run.charStart - inlineBefore
+  })
+}
+
+/**
  * @param {number} number
  * @param {Find} find
  * @returns {MemoMark}
@@ -255,16 +291,23 @@ function toMark(number, { parts, spot }) {
 export function markThread(thread, runs, pageIndex) {
   const { anchor, caret, multiParagraph } = thread
   const last = multiParagraph ? Infinity : (anchor?.endCharIdx ?? null)
-  if (!anchor || anchor.startCharIdx === null || anchor.start === null || last === null) return { hasStart: false, mark: null }
-  const { start, startCharIdx: from } = anchor
+  const inlineBefore = anchor?.inlineBefore === undefined ? 0 : anchor.inlineBefore
+  if (!anchor || anchor.startCharIdx === null || anchor.start === null || last === null || inlineBefore === null) {
+    return { hasStart: false, mark: null }
+  }
+  // From here on positions are the layout's, which counts inline objects as characters.
+  const start = anchor.start + inlineBefore
+  const from = anchor.startCharIdx + inlineBefore
   const chars =
-    anchor.text === '' && multiParagraph ? Array.from(thread.paragraphText).slice(from) : Array.from(anchor.text)
+    anchor.text === '' && multiParagraph
+      ? Array.from(thread.paragraphText).slice(anchor.startCharIdx)
+      : Array.from(anchor.text)
   const wanted = { chars, from, start }
   // The engine cuts a long text short; what cannot be compared is not marked.
-  const end = chars.length > 0 ? Math.min(last, from + chars.length) : last
+  const end = chars.length > 0 ? Math.min(last + inlineBefore, from + chars.length) : last + inlineBefore
 
   const copies = paragraphCopies(thread, runs)
-  const finds = copies.flatMap((pieces) => findIn(thread, pieces, start, end) ?? [])
+  const finds = copies.flatMap((pieces) => findIn(thread, pieces, start, end, inlineBefore) ?? [])
   const same = finds.filter((find) => isMemoText(find, wanted))
   const hasStart = same.length > 0
   if (!hasStart || !caret || pageIndex !== caret.page) return { hasStart, mark: null }
@@ -280,9 +323,11 @@ export function markThread(thread, runs, pageIndex) {
     chosen = near.length === 1 ? near[0] : null
   } else if (finds.length > 1) {
     // One text that the layout lists out of order, if it reads on and is all the memo's.
-    chosen = findIn(thread, finds.flatMap((find) => find.pieces), start, end)
+    chosen = findIn(thread, finds.flatMap((find) => find.pieces), start, end, inlineBefore)
   }
   if (!chosen || !isMemoText(chosen, wanted) || !readsOn(chosen, wanted)) return { hasStart, mark: null }
+  if (inlineBefore > 0 && !atCaret(chosen, start, caret)) return { hasStart, mark: null }
+  if (!isInPlace(thread, chosen, inlineBefore)) return { hasStart, mark: null }
   return { hasStart, mark: toMark(thread.number, chosen) }
 }
 

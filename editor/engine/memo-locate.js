@@ -22,12 +22,15 @@ const NO_PAGE = new Set(['header', 'footer', 'masterPage', 'unlinked'])
 const IN_LAYOUT = new Set(['body', 'tableCell', 'textBox'])
 
 /**
- * The thread as the caret is asked for: at the first character that is not blank.
+ * The thread as the caret is asked for: at the first character that is not blank, counted as the
+ * engine counts it.
  * @param {MemoThread} thread
  * @returns {MemoThread}
  */
 function atStart(thread) {
-  return thread.anchor ? { ...thread, anchor: { ...thread.anchor, startCharIdx: thread.anchor.start } } : thread
+  const { anchor } = thread
+  if (!anchor || anchor.start === null) return thread
+  return { ...thread, anchor: { ...anchor, startCharIdx: anchor.start + (anchor.inlineBefore ?? 0) } }
 }
 
 /**
@@ -70,6 +73,8 @@ export function locateThreads(doc, threads, { verify, deadline }) {
       thread.located = found.mark !== null
       continue
     }
+    // Behind an inline object only a caret on the page confirms the place, and there is none near.
+    if ((thread.anchor?.inlineBefore ?? 0) > 0) continue
     const near = [caret.page - 1, caret.page + 1].filter(
       (page) => page >= 0 && page < doc.pageCount && markThread(thread, runsOf(page), page).hasStart
     )

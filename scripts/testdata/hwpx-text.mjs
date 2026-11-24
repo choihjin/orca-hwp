@@ -136,6 +136,15 @@ export const memoEnd = (number) => ctrl(`<hp:fieldEnd beginIDRef="${number}" fie
  */
 export const memo = (number, content, spec) => memoStart(number, spec) + content + memoEnd(number)
 
+/**
+ * Text with the highlighter pen over it.
+ * @param {string} text
+ */
+export const highlighted = (text) => `<hp:t><hp:markpenBegin color="#FFFF00"/>${escapeXml(text)}<hp:markpenEnd/></hp:t>`
+
+/** @param {string} paras */
+export const hiddenComment = (paras) => ctrl(`<hp:hiddenComment>${subList(paras)}</hp:hiddenComment>`)
+
 /** @param {string} paras */
 export const footnote = (paras, number = 1) =>
   ctrl(`<hp:footNote number="${number}" suffixChar="41" instId="${100 + number}">${subList(paras)}</hp:footNote>`)

@@ -1,6 +1,11 @@
 #!/bin/sh
 # Rebuild v0.8.7 with the pinned patches, then check WASM, glue and declarations.
-# --install copies the four checked files into editor/vendor/rhwp/.
+# Requires Rust 1.93.1 with the wasm32-unknown-unknown target, wasm-pack 0.15.0,
+# wasm-bindgen 0.2.127, and Binaryen wasm-opt version 117. Set WASM_OPT to an
+# existing wasm-opt executable to use it instead of wasm-pack's cached binary.
+# --install copies all four files into editor/vendor/rhwp/ after checking the pins.
+# --install --force also copies a mismatched build (the check still exits nonzero).
+# After installing a verified build, run npm run vendor:rhwp to refresh engine-info.js.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)

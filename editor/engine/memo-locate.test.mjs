@@ -19,7 +19,17 @@ function thread(over = {}) {
     paragraphText: '예산 낱말',
     multiParagraph: false,
     memos: [],
-    anchor: { sectionIndex: 0, ownerParaIndex: 3, paraIndex: 3, path: null, startCharIdx: 0, endCharIdx: 2, ...anchor },
+    anchor: {
+      sectionIndex: 0,
+      ownerParaIndex: 3,
+      paraIndex: 3,
+      path: null,
+      startCharIdx: 0,
+      endCharIdx: 2,
+      text: rest.anchorText ?? '예산',
+      ...anchor
+    },
+    caret: null,
     ...rest
   }
 }
@@ -45,7 +55,7 @@ function fakeDoc(candidate, pages) {
   return {
     read,
     pageCount: pages.length,
-    memoCandidatePage: () => candidate,
+    memoCaret: () => (candidate === null ? null : { page: candidate, x: 0, y: 0 }),
     /** @param {number} i */
     pageAnchorRuns(i) {
       read.push(i)
@@ -97,13 +107,47 @@ test('the page is the one with the first character, not the one the rest runs in
   assert.deepEqual(locate(fakeDoc(0, [head, tail]), long()), [1, true])
 })
 
-test('when the layout has no glyph for the first character, the earliest marked page counts', () => {
+test('a first character on both neighbours keeps the candidate, not located', () => {
+  assert.deepEqual(locate(fakeDoc(1, [here, [], here]), thread()), [2, false])
+  // two copies on one neighbour are there as well, even if neither could be chosen
+  const copies = [run('예산 낱말'), run('예산 낱말', { x: 500 })]
+  assert.deepEqual(locate(fakeDoc(1, [here, [], copies]), thread()), [2, false])
+})
+
+test('the caret is kept, and moves with a corrected page', () => {
+  const stays = thread()
+  locate(fakeDoc(1, [here, here, []]), stays)
+  assert.deepEqual(stays.caret, { page: 1, x: 0, y: 0 })
+  const moves = thread()
+  locate(fakeDoc(1, [[], [], here]), moves)
+  assert.deepEqual(moves.caret, { page: 2, x: null, y: null })
+  const unverified = thread()
+  locate(fakeDoc(1, [[], [], here]), unverified, { verify: false })
+  assert.deepEqual(unverified.caret, { page: 1, x: 0, y: 0 })
+  const none = thread({ caret: { page: 1, x: 0, y: 0 } })
+  locate(fakeDoc(null, [here]), none)
+  assert.equal(none.caret, null)
+})
+
+test('copies that the caret cannot tell apart are on the page but not located', () => {
+  const copies = [run('예산 낱말', { x: 300 }), run('예산 낱말', { x: 500 })]
+  assert.deepEqual(locate(fakeDoc(1, [here, copies, []]), thread()), [2, false])
+  // corrected to a page where no caret position is known
+  assert.deepEqual(locate(fakeDoc(1, [[], [], copies]), thread()), [3, false])
+  const chosen = [run('예산 낱말'), run('예산 낱말', { x: 500 })]
+  assert.deepEqual(locate(fakeDoc(1, [[], chosen, []]), thread()), [2, true])
+})
+
+test('text that only runs on keeps the candidate, not located', () => {
+  const long = () => thread({ anchorText: '예산 낱말', anchor: { endCharIdx: 5 } })
+  const tail = [run(' 낱말', { charStart: 2 })]
+  assert.deepEqual(locate(fakeDoc(1, [[], tail, []]), long()), [2, false])
+  assert.deepEqual(locate(fakeDoc(1, [[], [], tail]), long()), [2, false])
+})
+
+test('blanks without a glyph before the first run do not hide the start', () => {
   const broken = () => thread({ anchorText: '\n예산', paragraphText: '\n예산', anchor: { endCharIdx: 3 } })
   assert.deepEqual(locate(fakeDoc(1, [[], [run('예산', { charStart: 1 })], []]), broken()), [2, true])
-  assert.deepEqual(
-    locate(fakeDoc(1, [[run('예', { charStart: 1 })], [run('산', { charStart: 2 })]]), broken()),
-    [1, true]
-  )
 })
 
 test('a repeated call drops a place that no longer holds', () => {

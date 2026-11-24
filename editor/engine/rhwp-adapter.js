@@ -16,13 +16,15 @@ export { ENGINE_INFO }
  */
 
 /** @typedef {import('./memo-marks.js').AnchorRun} AnchorRun */
+/** @typedef {import('./memo-threads.js').MemoCaret} MemoCaret */
 /** @typedef {import('./memo-threads.js').MemoReport} MemoReport */
 /** @typedef {import('./memo-threads.js').MemoThread} MemoThread */
 
 /**
  * Pages are numbered from 0; sizes are in the same px units as the SVG.
- * `memos` throws an `EngineError` when the memos cannot be read; the document stays usable.
- * `memoCandidatePage` is the page of the caret at the memo, null when the engine has none.
+ * `memos` gives a copy of its own on every call and throws an `EngineError` when the memos cannot
+ * be read; the document stays usable. `memoCaret` is null when the engine has no caret in the
+ * memo's paragraph.
  * `pageAnchorRuns` leaves out text that is not at a place in the document, such as page numbers.
  * @typedef {{
  *   pageCount: number,
@@ -30,7 +32,7 @@ export { ENGINE_INFO }
  *   renderPageSvg(i: number): string,
  *   pageTextRuns(i: number): TextRun[],
  *   memos(): MemoReport,
- *   memoCandidatePage(thread: MemoThread): number | null,
+ *   memoCaret(thread: MemoThread): MemoCaret | null,
  *   pageAnchorRuns(i: number): AnchorRun[],
  *   dispose(): void
  * }} EngineDocument
@@ -122,15 +124,24 @@ function readMemos(doc) {
 
 /**
  * @param {HwpDocument} doc
- * @param {MemoThread} thread
- * @returns {string | null} the caret as JSON
+ * @param {import('./memo-threads.js').MemoAnchor} anchor
+ * @param {number} char
+ * @param {number} pageCount
+ * @returns {MemoCaret | null} null for the 1 to 2 % of positions the engine has no caret for
  */
-function memoCaret(doc, { anchor }) {
-  if (!anchor) return null
-  const { sectionIndex, ownerParaIndex, path, startCharIdx } = anchor
-  return path && path.length > 0
-    ? doc.getCursorRectByPath(sectionIndex, ownerParaIndex, JSON.stringify(path), startCharIdx ?? 0)
-    : doc.getCursorRect(sectionIndex, ownerParaIndex, startCharIdx ?? 0)
+function caretAt(doc, { sectionIndex, ownerParaIndex, path }, char, pageCount) {
+  try {
+    const { pageIndex, x, y } = JSON.parse(
+      path && path.length > 0
+        ? doc.getCursorRectByPath(sectionIndex, ownerParaIndex, JSON.stringify(path), char)
+        : doc.getCursorRect(sectionIndex, ownerParaIndex, char)
+    )
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pageCount) return null
+    const placed = Number.isFinite(x) && Number.isFinite(y)
+    return { page: pageIndex, x: placed ? x : null, y: placed ? y : null }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -184,17 +195,16 @@ export function openDocument(bytes) {
       }))
     },
     memos() {
+      if (disposed) throw new EngineError('engine', 'the document is closed')
       memoReport ??= readMemos(doc)
-      return memoReport
+      return structuredClone(memoReport)
     },
-    memoCandidatePage(thread) {
-      try {
-        const caret = memoCaret(doc, thread)
-        const page = caret === null ? null : JSON.parse(caret).pageIndex
-        return Number.isInteger(page) && page >= 0 && page < pageCount ? page : null
-      } catch {
-        return null // the engine has no caret for 1 to 2 % of positions
-      }
+    memoCaret({ anchor }) {
+      if (!anchor) return null
+      const caret = anchor.startCharIdx === null ? null : caretAt(doc, anchor, anchor.startCharIdx, pageCount)
+      if (caret) return caret
+      const paragraph = caretAt(doc, anchor, 0, pageCount)
+      return paragraph && { page: paragraph.page, x: null, y: null }
     },
     pageAnchorRuns(i) {
       const layout = JSON.parse(doc.getPageTextLayout(i))

@@ -2,6 +2,7 @@
 // Plain ESM, no DOM, no engine: the document is passed in.
 import { markThread } from './memo-marks.js'
 
+/** @typedef {import('./memo-threads.js').MemoCaret} MemoCaret */
 /** @typedef {import('./memo-threads.js').MemoThread} MemoThread */
 /** @typedef {import('./memo-marks.js').AnchorRun} AnchorRun */
 
@@ -9,7 +10,7 @@ import { markThread } from './memo-marks.js'
  * What locating needs from an `EngineDocument`. Pages are numbered from 0.
  * @typedef {{
  *   pageCount: number,
- *   memoCandidatePage(thread: MemoThread): number | null,
+ *   memoCaret(thread: MemoThread): MemoCaret | null,
  *   pageAnchorRuns(i: number): AnchorRun[]
  * }} MemoPages
  */
@@ -21,8 +22,9 @@ const NO_PAGE = new Set(['header', 'footer', 'masterPage', 'unlinked'])
 const IN_LAYOUT = new Set(['body', 'tableCell', 'textBox'])
 
 /**
- * Sets `page` (from 1) and, when `verify` is set, `located` of each thread. Without `verify` no
- * layout is read, and a thread that is already located keeps its page.
+ * Sets `caret`, `page` (from 1) and, when `verify` is set, `located` of each thread. Without `verify`
+ * no layout is read, and a thread that is already located stays as it is. Located means the page
+ * shows the highlight of the memo's first character.
  * @param {MemoPages} doc
  * @param {MemoThread[]} threads
  * @param {{ verify: boolean }} options
@@ -46,25 +48,22 @@ export function locateThreads(doc, threads, { verify }) {
 
   for (const thread of threads) {
     if (thread.located && !verify) continue
-    const candidate = NO_PAGE.has(thread.place) ? null : doc.memoCandidatePage(thread)
-    thread.page = candidate === null ? null : candidate + 1
+    const caret = NO_PAGE.has(thread.place) ? null : doc.memoCaret(thread)
+    thread.caret = caret
+    thread.page = caret && caret.page + 1
     thread.located = false
-    if (candidate === null || !verify || !IN_LAYOUT.has(thread.place)) continue
-    /** @type {number | null} */
-    let partly = null
-    for (const page of [candidate, candidate - 1, candidate + 1]) {
-      if (page < 0 || page >= doc.pageCount) continue
-      const found = markThread(thread, runsOf(page))
-      if (found?.hasStart) {
-        thread.page = page + 1
-        thread.located = true
-        break
-      }
-      if (found) partly = partly === null ? page : Math.min(partly, page)
+    if (!caret || !verify || !IN_LAYOUT.has(thread.place)) continue
+    const found = markThread(thread, runsOf(caret.page), caret.page)
+    if (found.hasStart) {
+      thread.located = found.mark !== null
+      continue
     }
-    if (!thread.located && partly !== null) {
-      thread.page = partly + 1
-      thread.located = true
-    }
+    const near = [caret.page - 1, caret.page + 1].filter(
+      (page) => page >= 0 && page < doc.pageCount && markThread(thread, runsOf(page), page).hasStart
+    )
+    if (near.length !== 1) continue // nowhere near, or two heading rows with no telling which
+    thread.caret = { page: near[0], x: null, y: null }
+    thread.page = near[0] + 1
+    thread.located = markThread(thread, runsOf(near[0]), near[0]).mark !== null
   }
 }

@@ -18,20 +18,28 @@
 /**
  * Where the memo's text is. `ownerParaIndex` is the paragraph directly in the section; `path` leads
  * from it into table cells and text boxes. Character positions count code points. All but the first
- * two are null outside body text, table cells and text boxes.
+ * two are null outside body text, table cells and text boxes. `text` is the memo's text exactly as
+ * the file has it: positions count its control characters too.
  * @typedef {{
  *   sectionIndex: number,
  *   ownerParaIndex: number,
  *   paraIndex: number | null,
  *   path: CellStep[] | null,
  *   startCharIdx: number | null,
- *   endCharIdx: number | null
+ *   endCharIdx: number | null,
+ *   text: string
  * }} MemoAnchor
  */
 
 /**
+ * Where the engine puts a caret at the memo's first character: `page` counts from 0, `x` and `y`
+ * are page px and null when only the page is known.
+ * @typedef {{ page: number, x: number | null, y: number | null }} MemoCaret
+ */
+
+/**
  * `number` and `page` count from 1; `page` is null when unknown. `located` says the highlight was
- * found on that page (memo-locate.js).
+ * found on that page. `page`, `located` and `caret` are set by memo-locate.js.
  * @typedef {{
  *   number: number,
  *   page: number | null,
@@ -41,7 +49,8 @@
  *   paragraphText: string,
  *   multiParagraph: boolean,
  *   memos: Memo[],
- *   anchor: MemoAnchor | null
+ *   anchor: MemoAnchor | null,
+ *   caret: MemoCaret | null
  * }} MemoThread
  */
 
@@ -166,11 +175,13 @@ function readEntry(value) {
   const anchorKey = place === 'unlinked' ? null : string(source, 'anchorKey')
   const sectionIndex = indexOrNull(source, 'sectionIndex')
   const ownerParaIndex = indexOrNull(source, 'ownerParaIndex')
+  const anchorText = string(source, 'anchorText')
   const spot = {
     paraIndex: indexOrNull(source, 'paraIndex'),
     path: cellPath(source),
     startCharIdx: indexOrNull(source, 'startCharIdx'),
-    endCharIdx: indexOrNull(source, 'endCharIdx')
+    endCharIdx: indexOrNull(source, 'endCharIdx'),
+    text: anchorText
   }
   const dateText = stringOrNull(source, 'dateText')
   const text = stringOrNull(source, 'text')
@@ -189,11 +200,12 @@ function readEntry(value) {
       page: null,
       located: false,
       place: /** @type {MemoPlace} */ (place),
-      anchorText: clean(string(source, 'anchorText')),
+      anchorText: clean(anchorText),
       paragraphText: clean(string(source, 'paragraphText')),
       multiParagraph: source.multiParagraph,
       memos: [],
-      anchor: sectionIndex === null || ownerParaIndex === null ? null : { sectionIndex, ownerParaIndex, ...spot }
+      anchor: sectionIndex === null || ownerParaIndex === null ? null : { sectionIndex, ownerParaIndex, ...spot },
+      caret: null
     }
   }
 }
@@ -283,7 +295,7 @@ export function fullDate(memo) {
 /**
  * The thread as agents get it: a copy without the engine position.
  * @param {MemoThread} thread
- * @returns {Omit<MemoThread, 'anchor'>}
+ * @returns {Omit<MemoThread, 'anchor' | 'caret'>}
  */
 export function publicThread(thread) {
   return {

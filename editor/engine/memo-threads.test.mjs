@@ -89,7 +89,8 @@ test('a thread carries its anchor and has no page until it is located', () => {
     paragraphText: '셋째 문단의 "예산" 낱말',
     multiParagraph: false,
     memos: [{ author: '검토자 가', date: '2026-11-20T08:24:04Z', dateText: null, text: '본문' }],
-    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2 }
+    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산' },
+    caret: null
   })
 })
 
@@ -131,7 +132,8 @@ test('a memo outside body text keeps the paragraph that owns it', () => {
     paraIndex: null,
     path: null,
     startCharIdx: null,
-    endCharIdx: null
+    endCharIdx: null,
+    text: '예산'
   })
   assert.equal(threads[1].anchor, null)
 })
@@ -151,6 +153,8 @@ test('control characters are removed, line breaks, tabs and markup stay as writt
   assert.equal(threads[0].memos[0].dateText, '2026년')
   assert.equal(threads[0].anchorText, '예산')
   assert.equal(threads[0].paragraphText, '문단')
+  // positions count every character, so the highlight compares with the text as the file has it
+  assert.equal(threads[0].anchor?.text, '예\u0001산')
 })
 
 test('a missing body stays null, an empty body stays empty', () => {
@@ -207,8 +211,9 @@ test('fullDate is the local date and minute', () => {
   })
 })
 
-test('publicThread leaves out the anchor and does not touch the thread', () => {
+test('publicThread leaves out the engine position and does not touch the thread', () => {
   const { threads } = build([entry()])
+  threads[0].caret = { page: 0, x: 1, y: 2 }
   const shared = publicThread(threads[0])
   assert.deepEqual(Object.keys(shared), ['number', 'page', 'place', 'anchorText', 'paragraphText', 'multiParagraph', 'located', 'memos'])
   shared.memos[0].text = '바뀜'

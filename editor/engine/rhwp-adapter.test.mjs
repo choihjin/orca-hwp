@@ -203,7 +203,7 @@ test('a document without memos gives an empty report', async () => {
   doc.dispose()
 })
 
-test('memos are read from the engine once and kept', async () => {
+test('memos are read from the engine once, every call gives its own copy', async () => {
   if (!existsSync(sampleUrl)) return
   const doc = await openSample()
   let calls = 0
@@ -215,10 +215,15 @@ test('memos are read from the engine once and kept', async () => {
     const report = doc.memos()
     assert.equal(report.threads[0].memos[0].text, '본문')
     assert.deepEqual(report.problems, [{ code: 'bad-record' }])
-    assert.equal(doc.memos(), report)
+    report.threads[0].memos[0].text = '바뀜'
+    report.threads[0].page = 9
+    report.problems.length = 0
+    const again = doc.memos()
+    assert.deepEqual([again.threads[0].memos[0].text, again.threads[0].page, again.problems.length], ['본문', null, 1])
     assert.equal(calls, 1)
+    doc.dispose()
+    assert.equal(codeOf(() => doc.memos()), 'engine')
   })
-  doc.dispose()
 })
 
 test('an engine that cannot give memos is an engine error, not a document without memos', async () => {
@@ -269,7 +274,7 @@ function threadAt(over = {}) {
   })
 }
 
-test('memoCandidatePage asks the caret for the memo position, by path inside cells', async () => {
+test('memoCaret asks the engine for the memo position, by path inside cells', async () => {
   if (!existsSync(sampleUrl)) return
   const doc = await openSample()
   /** @type {unknown[][]} */
@@ -280,37 +285,56 @@ test('memoCandidatePage asks the caret for the memo position, by path inside cel
   }
   withEngine({ getCursorRect: answer('rect'), getCursorRectByPath: answer('path') }, () => {
     const path = [{ controlIndex: 0, cellIndex: 3, cellParaIndex: 1 }]
-    assert.equal(doc.memoCandidatePage(threadAt()), 2)
-    assert.equal(doc.memoCandidatePage(threadAt({ anchor: { path: [] } })), 2)
-    assert.equal(doc.memoCandidatePage(threadAt({ place: 'tableCell', anchor: { ownerParaIndex: 7, paraIndex: 1, path } })), 2)
-    // a note or caption has no position of its own: the paragraph that owns it counts
+    const caret = { page: 2, x: 1, y: 2 }
+    assert.deepEqual(doc.memoCaret(threadAt()), caret)
+    assert.deepEqual(doc.memoCaret(threadAt({ anchor: { path: [] } })), caret)
+    assert.deepEqual(doc.memoCaret(threadAt({ place: 'tableCell', anchor: { ownerParaIndex: 7, paraIndex: 1, path } })), caret)
+    // a note or caption has no position of its own: the paragraph that owns it gives the page
     const outside = { paraIndex: null, path: null, startCharIdx: null, endCharIdx: null }
-    assert.equal(doc.memoCandidatePage(threadAt({ place: 'footnote', anchor: { ...outside, ownerParaIndex: 4 } })), 2)
+    assert.deepEqual(doc.memoCaret(threadAt({ place: 'footnote', anchor: { ...outside, ownerParaIndex: 4 } })), { page: 2, x: null, y: null })
     assert.deepEqual(asked, [['rect', 0, 2, 1], ['rect', 0, 2, 1], ['path', 0, 7, JSON.stringify(path), 1], ['rect', 0, 4, 0]])
-    assert.equal(doc.memoCandidatePage({ ...threadAt(), place: 'unlinked', anchor: null }), null)
+    assert.equal(doc.memoCaret({ ...threadAt(), place: 'unlinked', anchor: null }), null)
   })
   doc.dispose()
 })
 
-test('memoCandidatePage is null when the caret has no position', async () => {
+const noCaret = () => {
+  throw '렌더링 오류: 문단 (sec=0, para=99)이 페이지에 없습니다'
+}
+/** Answers that give no caret; the sample has 4 pages. */
+const badCarets = [noCaret, () => '{}', () => '{"pageIndex":4,"x":1,"y":2}', () => '{"pageIndex":-1,"x":1,"y":2}', () => 'x']
+
+test('memoCaret takes the page of the paragraph start when the position has none', async () => {
   if (!existsSync(sampleUrl)) return
   const doc = await openSample()
-  for (const getCursorRect of [
-    () => {
-      throw '렌더링 오류: 문단 (sec=0, para=99)이 페이지에 없습니다'
-    },
-    () => '{}',
-    () => '{"pageIndex":4}', // the sample has 4 pages
-    () => '{"pageIndex":-1}',
-    () => 'x'
-  ]) {
-    withEngine({ getCursorRect }, () => assert.equal(doc.memoCandidatePage(threadAt()), null))
+  const path = [{ controlIndex: 0, cellIndex: 3, cellParaIndex: 1 }]
+  for (const bad of badCarets) {
+    const getCursorRect = (/** @type {number} */ sec, /** @type {number} */ para, /** @type {number} */ char) =>
+      char === 0 ? '{"pageIndex":1,"x":5,"y":6}' : bad()
+    const getCursorRectByPath = (/** @type {number} */ sec, /** @type {number} */ para, /** @type {string} */ steps, /** @type {number} */ char) =>
+      char === 0 ? '{"pageIndex":3,"x":5,"y":6}' : bad()
+    withEngine({ getCursorRect, getCursorRectByPath }, () => {
+      assert.deepEqual(doc.memoCaret(threadAt()), { page: 1, x: null, y: null })
+      assert.deepEqual(doc.memoCaret(threadAt({ anchor: { path } })), { page: 3, x: null, y: null })
+    })
+  }
+  withEngine({ getCursorRect: () => '{"pageIndex":1}' }, () => {
+    assert.deepEqual(doc.memoCaret(threadAt()), { page: 1, x: null, y: null })
+  })
+  doc.dispose()
+})
+
+test('memoCaret is null when the engine has no position in the paragraph', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  for (const getCursorRect of badCarets) {
+    withEngine({ getCursorRect }, () => assert.equal(doc.memoCaret(threadAt()), null))
   }
   doc.dispose()
 })
 
 // 35 pages of body text and tables, none of them with a heading row repeated on later pages.
-test('memoCandidatePage follows text to the page it is drawn on; boundaries count code points', async () => {
+test('memoCaret follows text to the page it is drawn on; boundaries count code points', async () => {
   if (!existsSync(planUrl)) return
   const doc = await openSample(planUrl)
   let seen = 0
@@ -328,7 +352,7 @@ test('memoCandidatePage follows text to the page it is drawn on; boundaries coun
         path: run.cellPath ?? null,
         startCharIdx: run.charStart
       }
-      assert.equal(doc.memoCandidatePage(threadAt({ anchor })), page, run.text)
+      assert.equal(doc.memoCaret(threadAt({ anchor }))?.page, page, run.text)
     }
   }
   assert.ok(seen > 4000)

@@ -25,7 +25,7 @@ const localPath = (name) => fileURLToPath(new URL(encodeURIComponent(name), fixt
 
 /**
  * @param {string} name
- * @param {{ path: string, size: number, sha256: string }} pin
+ * @param {{ path: string, size: number, sha256: string, rawBase?: string }} pin
  * @returns {Promise<string | null>} an error message, or null when the file is in place
  */
 async function ensure(name, pin) {
@@ -38,7 +38,7 @@ async function ensure(name, pin) {
     }
     console.log(`refetch  ${name} (local copy does not match its pin)`)
   }
-  const url = config.source.rawBase + pin.path.split('/').map(encodeURIComponent).join('/')
+  const url = (pin.rawBase ?? config.source.rawBase) + pin.path.split('/').map(encodeURIComponent).join('/')
   let bytes
   try {
     const response = await fetch(url)

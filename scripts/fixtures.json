@@ -55,6 +55,18 @@
       "path": "samples/2025 행정업무운영 편람(최종).hwpx",
       "size": 13639865,
       "sha256": "c6dd7e847a99f219681afc5a29c80a9665c04df9cda4d820a3350d739664fdf6"
+    },
+    "synthetic-tac-sibling-reset.hwp": {
+      "rawBase": "https://raw.githubusercontent.com/choihjin/orca-hwp/01c7b454cf9480b7602e11f1495058d93e838909/",
+      "path": "scripts/testdata/synthetic-tac-sibling-reset.hwp",
+      "size": 6144,
+      "sha256": "022e6667488521d73c3ff6f4dbdb6ff82f71e91d5692f2a9a2785453f0a67eeb"
+    },
+    "synthetic-tac-sibling-reset-shapes.hwp": {
+      "rawBase": "https://raw.githubusercontent.com/choihjin/orca-hwp/01c7b454cf9480b7602e11f1495058d93e838909/",
+      "path": "scripts/testdata/synthetic-tac-sibling-reset-shapes.hwp",
+      "size": 6144,
+      "sha256": "c3d2b619ff57fa58bee9deb572d12eb973c212433566f6089aebcbc5811c6b64"
     }
   },
   "derived": {

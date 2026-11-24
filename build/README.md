@@ -19,8 +19,12 @@ resvg-wasm과 woff2-encoder의 해제 전용 파일을 갱신한다. 두 스크�
 플러그인 폴더는 67,132,409 B였다. 폴더 상한은 52,428,800 B다.
 프레임은 상류 WOFF2 13개(12,558,440 B)를 그대로 사용한다. P2는
 `agent/vendor/woff2/decode.mjs`의 `decodeWoff2(bytes)`로 메모리에서
-TTF·OTF를 복원해 resvg에 넘긴다. 디코더는 WASM이 내장된 npm
-`woff2-encoder@2.0.0`의 해제 전용 모듈이다.
+TTF·OTF를 복원해 resvg에 넘긴다. 디코더는 npm
+`woff2-encoder@2.0.0`의 해제 전용 모듈이다. 원본은 WASM을 base64
+문자열로 JS 안에 담지만, `vendor:resvg`가 이를 `decompress.wasm`으로
+꺼내고 JS가 그 파일을 읽게 고친다(`pins.json`의 `woff2.wasm`과 대조).
+포장된 코드처럼 보이는 파일은 Orca 커뮤니티 카탈로그에서 심사 대상이
+되기 때문이다. 13개 글꼴의 해제 결과가 고치기 전과 같음을 확인했다.
 
 `manifest.json`의 `families`는 SVG/CSS에서 요청하는 이름이다. resvg가
 글꼴 바이트에서 읽는 이름 중 `Noto Serif KR ExtraLight`는 Noto Serif KR

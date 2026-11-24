@@ -28,6 +28,7 @@ function thread(over = {}) {
       endCharIdx: 2,
       text: rest.anchorText ?? '예산',
       start: 0,
+      inlineBefore: 0,
       ...anchor
     },
     caret: null,
@@ -215,4 +216,32 @@ test('a page whose layout cannot be read leaves the other threads alone', () => 
   const threads = [thread(), thread({ number: 2, anchorText: '없음' })]
   locateThreads(doc, threads, { verify: true })
   assert.deepEqual(threads.map((one) => [one.page, one.located]), [[2, true], [1, false]])
+})
+
+test('after inline objects the caret is asked for with them counted', () => {
+  /** @type {(number | null | undefined)[]} */
+  const asked = []
+  const ask = (/** @type {Partial<NonNullable<MemoThread['anchor']>>} */ anchor) => {
+    const one = thread({ anchorText: '\n하', paragraphText: '가\n하', anchor: { startCharIdx: 1, start: 2, endCharIdx: 3, ...anchor } })
+    const doc = {
+      ...fakeDoc(0, [[run('하', { charStart: 3, x: 7 })]]),
+      memoCaret(/** @type {MemoThread} */ each) {
+        asked.push(each.anchor?.startCharIdx)
+        return { page: 0, x: 7, y: 0 }
+      }
+    }
+    return locate(doc, one)
+  }
+  assert.deepEqual(ask({ inlineBefore: 1 }), [1, true])
+  assert.deepEqual(ask({ inlineBefore: 0 }), [1, false])
+  // unknown: the page as near as can be told, no highlight
+  assert.deepEqual(ask({ inlineBefore: null }), [1, false])
+  assert.deepEqual(asked, [3, 2, 2])
+})
+
+test('after inline objects a page is not corrected to one that has no caret to confirm it', () => {
+  const behind = () => thread({ anchor: { inlineBefore: 1 } })
+  const there = [run('예산 낱말', { charStart: 1 })]
+  assert.deepEqual(locate(fakeDoc(0, [[], there]), behind()), [1, false])
+  assert.deepEqual(locate(fakeDoc(1, [[], there]), behind()), [2, true])
 })

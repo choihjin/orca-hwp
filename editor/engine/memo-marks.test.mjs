@@ -51,6 +51,7 @@ function thread(over = {}) {
       startCharIdx: 8,
       endCharIdx: 10,
       text: rest.anchorText ?? '예산',
+      inlineBefore: 0,
       ...anchor,
       start: anchor?.start ?? (anchor?.startCharIdx === undefined ? 8 : anchor.startCharIdx)
     },
@@ -382,6 +383,131 @@ test('a memo of no length in two copies of a paragraph has its number at the car
   assert.deepEqual(memoMarks([empty], twice), [{ number: 1, rects: [], badge: { x: 580, y: 20 } }])
   assert.deepEqual(memoMarks([{ ...empty, caret: { page: 0, x: null, y: null } }], twice), [])
   assert.deepEqual(memoMarks([empty], twice, 1), [])
+})
+
+/**
+ * A memo on one character of a line that begins with an inline object: the layout counts the object
+ * as a character, the memo does not.
+ * @param {string} text of the paragraph, without the object
+ * @param {number} at
+ * @param {number | null} inlineBefore
+ * @param {MemoThread['caret']} caret
+ */
+const afterObject = (text, at, inlineBefore, caret) =>
+  thread({
+    anchorText: text[at],
+    paragraphText: text,
+    anchor: { startCharIdx: at, endCharIdx: at + 1, inlineBefore },
+    caret
+  })
+
+test('after an inline object the memo character is marked, not the one before it', () => {
+  for (const text of ['하하하', '1000', '가나다']) {
+    const line = [run({ text, x: 300, charStart: 1 })]
+    for (let at = 0; at < text.length; at++) {
+      const marks = memoMarks([afterObject(text, at, 1, { page: 0, x: 300 + 10 * at, y: 50 })], line)
+      assert.deepEqual(marks[0].rects, [{ x: 300 + 10 * at, y: 50, w: 10, h: 13 }], `${text} ${at}`)
+    }
+  }
+  // two objects, one before and one within the line
+  const two = [run({ text: '가', x: 300, charStart: 1 }), run({ text: '나다', x: 400, charStart: 3 })]
+  assert.deepEqual(memoMarks([afterObject('가나다', 1, 2, { page: 0, x: 400, y: 50 })], two)[0].rects[0].x, 400)
+})
+
+test('after an inline object nothing is marked that the caret does not confirm', () => {
+  const line = [run({ text: '하하하', x: 300, charStart: 1 })]
+  for (const caret of [
+    { page: 0, x: 300, y: 50 }, // a character before the memo's
+    { page: 0, x: 320, y: 50 },
+    { page: 0, x: 310, y: 80 },
+    { page: 0, x: null, y: null },
+    { page: 1, x: 310, y: 50 },
+    null
+  ]) {
+    assert.deepEqual(memoMarks([afterObject('하하하', 1, 1, caret)], line), [], JSON.stringify(caret))
+  }
+  // the number of a memo of no length needs the caret as well
+  const empty = (/** @type {number} */ x) =>
+    thread({ anchorText: '', paragraphText: '하하하', anchor: { startCharIdx: 1, endCharIdx: 1, inlineBefore: 1 }, caret: { page: 0, x, y: 50 } })
+  assert.deepEqual(memoMarks([empty(310)], line), [{ number: 1, rects: [], badge: { x: 310, y: 50 } }])
+  assert.deepEqual(memoMarks([empty(300)], line), [])
+})
+
+test('a later line, which the engine counts without the object, is not marked a character too far', () => {
+  // line 1 begins behind the object and is counted with it, line 2 is not
+  const lines = [run({ text: '하하하', x: 300, charStart: 1 }), run({ text: '하하하', x: 100, y: 80, charStart: 3 })]
+  for (let at = 3; at < 6; at++) {
+    const caret = { page: 0, x: 100 + 10 * (at - 3), y: 80 }
+    assert.deepEqual(memoMarks([afterObject('하하하하하하', at, 1, caret)], lines), [], String(at))
+  }
+})
+
+test('a caret that follows the layout is no proof: the line must be where the paragraph has it', () => {
+  // the layout counts the object on line 1 only, the caret (in cells, behind a line break) as it does
+  const at = (/** @type {string} */ text, /** @type {number} */ index) => {
+    const lines = [run({ text: text.slice(0, 3), x: 300, charStart: 1 }), run({ text: text.slice(3), x: 100, y: 80, charStart: 3 })]
+    const caret = index < 3 ? { page: 0, x: 300 + 10 * index, y: 50 } : { page: 0, x: 100 + 10 * (index + 1 - 3), y: 80 }
+    return memoMarks([afterObject(text, index, 1, caret)], lines).map((mark) => mark.rects[0].x)
+  }
+  assert.deepEqual(at('가나다라하하하', 4), [])
+  assert.deepEqual(at('하하하하하하하', 4), [])
+  // line 1 is at its place, and its text is nowhere else in the paragraph
+  assert.deepEqual(at('가나다라하하하', 1), [310])
+  assert.deepEqual(at('가나다가나다라', 1), [])
+})
+
+test('behind an object a paragraph the engine cut short cannot confirm a place', () => {
+  const text = '가나다' + '라'.repeat(1997)
+  const caret = { page: 0, x: 310, y: 50 }
+  const line = [run({ text: '가나다', x: 300, charStart: 1 })]
+  assert.deepEqual(memoMarks([afterObject(text, 1, 1, caret)], line), [])
+  assert.equal(memoMarks([afterObject(text.slice(0, 1999), 1, 1, caret)], line).length, 1)
+})
+
+test('a text box whose layout counts an object after the memo is not marked', () => {
+  const box = (/** @type {Partial<AnchorRun>} */ over) =>
+    run({ paraIdx: 0, parentParaIdx: 7, cellPath: cell(0), ...over })
+  const memo = (/** @type {string} */ text) =>
+    thread({
+      place: 'textBox',
+      anchorText: text[4],
+      paragraphText: text,
+      anchor: { ownerParaIndex: 7, path: cell(0), startCharIdx: 4, endCharIdx: 5 }
+    })
+  // an object at the end of line 2 already moves the beginning of the line by one
+  for (const text of ['가나다라하하하', '하하하하하하하']) {
+    assert.deepEqual(memoMarks([memo(text)], [box({ text: text.slice(0, 3) }), box({ text: text.slice(3), charStart: 4, y: 80 })]), [])
+  }
+  // line 1 is at its place, and nowhere else; alike lines cannot say
+  const first = (/** @type {string} */ text) => {
+    const late = memo(text)
+    const early = { ...late, anchorText: text[1], anchor: late.anchor && { ...late.anchor, startCharIdx: 1, start: 1, endCharIdx: 2, text: text[1] } }
+    return memoMarks([early], [box({ text: text.slice(0, 3) }), box({ text: text.slice(3), charStart: 4, y: 80 })]).length
+  }
+  assert.equal(first('가나다라하하하'), 1)
+  assert.equal(first('하하하하하하하'), 0)
+  assert.equal(memoMarks([memo('가나다라하하하')], [box({ text: '가나다' }), box({ text: '라하하하', charStart: 3, y: 80 })]).length, 1)
+})
+
+test('without an object before the memo a single place needs no caret position', () => {
+  const line = [run({ text: '하하하' })]
+  const marks = memoMarks([afterObject('하하하', 1, 0, { page: 0, x: null, y: null })], line)
+  assert.deepEqual(marks[0].rects, [{ x: 110, y: 50, w: 10, h: 13 }])
+})
+
+test('an unknown number of objects before the memo marks nothing', () => {
+  const line = [run({ text: '하하하', charStart: 0 }), run({ text: '하하하', charStart: 1, x: 300 })]
+  for (const caret of [{ page: 0, x: 110, y: 50 }, { page: 0, x: null, y: null }]) {
+    assert.deepEqual(memoMarks([afterObject('하하하', 1, null, caret)], line), [])
+    assert.deepEqual(memoMarks([afterObject('하하하', 1, null, caret)], [line[0]]), [])
+  }
+})
+
+test('an object within the memo text ends what can be compared', () => {
+  // 하|하[object]하하|: the memo is on three characters, the layout has a position in between
+  const line = [run({ text: '하하' }), run({ text: '하하', x: 300, charStart: 3 })]
+  const memo = thread({ anchorText: '하하하', paragraphText: '하하하하', anchor: { startCharIdx: 1, endCharIdx: 4 } })
+  assert.deepEqual(memoMarks([memo], line), [])
 })
 
 test('a memo without a text position is not marked', () => {

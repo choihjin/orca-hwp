@@ -20,7 +20,9 @@
  * from it into table cells and text boxes. Character positions count code points. All but the first
  * two are null outside body text, table cells and text boxes. `text` is the memo's text exactly as
  * the file has it: positions count its control characters too. `start` is `startCharIdx` past the
- * blanks `text` begins with, which may have no glyph or end another page than the text.
+ * blanks `text` begins with, which may have no glyph or end another page than the text. The engine's
+ * layout and caret count an inline object as a character, these positions do not: `inlineBefore` is
+ * how many come before the memo, null when that is not known, absent for none.
  * @typedef {{
  *   sectionIndex: number,
  *   ownerParaIndex: number,
@@ -29,7 +31,8 @@
  *   startCharIdx: number | null,
  *   endCharIdx: number | null,
  *   text: string,
- *   start: number | null
+ *   start: number | null,
+ *   inlineBefore?: number | null
  * }} MemoAnchor
  */
 
@@ -91,7 +94,7 @@ const PROBLEM_DETAILS = new Map([
 ])
 
 /** The engine gives the first 2,000 code points of `anchorText` and `paragraphText`. */
-const TEXT_LIMIT = 2000
+export const TEXT_LIMIT = 2000
 
 /**
  * Removes C0 controls (but not line feed and tab) and DEL.
@@ -212,13 +215,16 @@ function readEntry(value) {
   const anchorText = string(source, 'anchorText')
   const paragraphText = string(source, 'paragraphText')
   const startCharIdx = indexOrNull(source, 'startCharIdx')
+  const inlineBefore = source.inlineBefore === undefined ? 0 : indexOrNull(source, 'inlineBefore')
   const spot = {
     paraIndex: indexOrNull(source, 'paraIndex'),
     path: cellPath(source),
     startCharIdx,
     endCharIdx: indexOrNull(source, 'endCharIdx'),
     text: anchorText,
-    start: startOf(startCharIdx, anchorText, source.multiParagraph ? paragraphText : null)
+    start: startOf(startCharIdx, anchorText, source.multiParagraph ? paragraphText : null),
+    // Behind an object the paragraph's text confirms the place, which it cannot with characters removed.
+    inlineBefore: inlineBefore && clean(paragraphText) !== paragraphText ? null : inlineBefore
   }
   const dateText = stringOrNull(source, 'dateText')
   const text = stringOrNull(source, 'text')

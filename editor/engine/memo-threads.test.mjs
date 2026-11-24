@@ -90,7 +90,7 @@ test('a thread carries its anchor and has no page until it is located', () => {
     paragraphText: '셋째 문단의 "예산" 낱말',
     multiParagraph: false,
     memos: [{ author: '검토자 가', date: '2026-11-20T08:24:04Z', dateText: null, text: '본문' }],
-    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산', start: 0 },
+    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산', start: 0, inlineBefore: 0 },
     caret: null
   })
 })
@@ -135,7 +135,8 @@ test('a memo outside body text keeps the paragraph that owns it', () => {
     startCharIdx: null,
     endCharIdx: null,
     text: '예산',
-    start: null
+    start: null,
+    inlineBefore: 0
   })
   assert.equal(threads[1].anchor, null)
 })
@@ -150,6 +151,18 @@ test('a memo starts for the engine at its first character that is not blank', ()
   assert.equal(startOf({ startCharIdx: null, endCharIdx: null, place: 'footnote' }), null)
   // what people and agents read keeps its blanks
   assert.equal(build([entry({ anchorText: ' 갑' })]).threads[0].anchorText, ' 갑')
+})
+
+test('inlineBefore is kept, unknown as null, and 0 from an engine that does not give it', () => {
+  const of = (/** @type {object} */ over) => build([entry(over)]).threads[0].anchor?.inlineBefore
+  assert.equal(of({ inlineBefore: 2 }), 2)
+  assert.equal(of({ inlineBefore: 0 }), 0)
+  assert.equal(of({ inlineBefore: null }), null)
+  assert.equal(of({}), 0)
+  // the paragraph people see has no control characters: its positions cannot confirm the layout's
+  assert.equal(of({ inlineBefore: 1, paragraphText: '가\u0001나' }), null)
+  assert.equal(of({ inlineBefore: 0, paragraphText: '가\u0001나' }), 0)
+  for (const inlineBefore of ['1', -1, 1.5]) assert.throws(() => of({ inlineBefore }), (error) => error instanceof Error)
 })
 
 test('a memo over several paragraphs does not start past the end of its first', () => {

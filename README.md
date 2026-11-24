@@ -102,7 +102,7 @@ npm run check:size    # check Orca's size limits
 orca plugin dev watch .
 ```
 
-The editor runs with no build step. Third-party files (rhwp, fonts, PNG renderer) are downloaded and hash-checked by the scripts in `build/` (`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). `npm run notices` writes the third-party notices. The engine WASM is built from v0.8.7 with the patch in `build/rhwp-patches/`; `build/build-rhwp-patched.sh` rebuilds it and compares the hash with the pin (needs a Rust toolchain).
+The editor runs with no build step. Third-party files (rhwp, fonts, PNG renderer) are downloaded and hash-checked by the scripts in `build/` (`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). `npm run notices` writes the third-party notices. The engine (WASM and its JS glue) is built from v0.8.7 with the two patches in `build/rhwp-patches/`; `build/build-rhwp-patched.sh` rebuilds it and compares the hash with the pin (needs a Rust toolchain).
 
 | Path | What it is |
 |---|---|

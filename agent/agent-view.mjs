@@ -285,6 +285,12 @@ async function renderPage(options) {
   }
 }
 
+// Terminal and line-separator characters in document text could change how JSON is shown or split;
+// escaped, the parsed values stay the same.
+function escapeControls(json) {
+  return json.replace(/[\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
 function singleLine(text) {
   return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/[\n\u2028\u2029]+/g, ' ')
@@ -312,7 +318,8 @@ try {
     json = options.json
     const { threads, ...result } = await renderPage(options)
     if (json) {
-      console.log(JSON.stringify({ ...result, memos: threads?.map(publicThread) }))
+      const output = JSON.stringify({ ...result, memos: threads?.map(publicThread) })
+      console.log(options.memos ? escapeControls(output) : output)
     } else {
       console.log(result.png)
       printMemos(threads ?? [])

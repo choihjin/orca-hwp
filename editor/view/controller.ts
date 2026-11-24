@@ -124,7 +124,12 @@ export function createController(deps: {
     if (current) {
       const doc = current
       current = null
-      doc.dispose()
+      try {
+        doc.dispose()
+      } catch (error) {
+        // After an engine trap the old document cannot be freed; the next one still opens.
+        console.error(`[hwp-viewer] dispose: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
   }
 

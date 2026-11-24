@@ -159,6 +159,18 @@ test('memo JSON exposes the whole report and plain output flattens each memo to 
   })
 })
 
+test('memo JSON carries no terminal or line-separator characters as such', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const author = '검토자\u202e가'
+    const text = '앞\u0085뒤\u2028끝\u2066'
+    const result = run([sample, '--memos', '--out', 'page.png'], dir, mockMemoPage(dir, { author, text }))
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.doesNotMatch(result.stdout, /[\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/)
+    assert.deepEqual(JSON.parse(result.stdout).memos[0].memos[0].text, text)
+  })
+})
+
 test('memo highlights survive a region edge and padding and leave disjoint regions unchanged', () => {
   if (!existsSync(sample)) return
   withOutputDir((dir) => {

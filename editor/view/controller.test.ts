@@ -123,6 +123,33 @@ test('기억이 없으면 첫 칠에 0쪽을 동기로 보낸다', () => {
   c.dispose()
 })
 
+test('이전 문서를 놓지 못해도 다음 문서를 열고 닫을 때 화면을 비운다', async () => {
+  const a = fakeDoc('a', 2)
+  a.dispose = () => {
+    throw new Error('memory access out of bounds')
+  }
+  const b = fakeDoc('b', 3)
+  const view = fakeView()
+  const c = createController({ engine: engineOf(a, b), view, storage: null })
+  await c.load(bytesA)
+  await c.load(bytesB)
+  const last = view.last()
+  assert.equal(last?.kind === 'show' && last.doc, b)
+  const errors: unknown[] = []
+  const { error } = console
+  console.error = (...args) => errors.push(args)
+  try {
+    b.dispose = () => {
+      throw new Error('still broken')
+    }
+    c.dispose()
+  } finally {
+    console.error = error
+  }
+  assert.equal(view.last()?.kind, 'clear')
+  assert.equal(errors.length, 1)
+})
+
 test('문서가 바뀌면 이전 문서를 dispose하고 다시 연다', async () => {
   const a = fakeDoc('a', 4)
   const b = fakeDoc('b', 5)

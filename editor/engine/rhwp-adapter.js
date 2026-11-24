@@ -4,6 +4,7 @@
 import init, { HwpDocument } from '../vendor/rhwp/rhwp.js'
 import { ENGINE_INFO } from '../vendor/rhwp/engine-info.js'
 import { detectKind } from '../format.js'
+import { buildMemoReport } from './memo-threads.js'
 
 export { ENGINE_INFO }
 
@@ -14,13 +15,25 @@ export { ENGINE_INFO }
  *   fontFamily: string, fontSize: number, bold: boolean }} TextRun
  */
 
+/** @typedef {import('./memo-marks.js').AnchorRun} AnchorRun */
+/** @typedef {import('./memo-threads.js').MemoCaret} MemoCaret */
+/** @typedef {import('./memo-threads.js').MemoReport} MemoReport */
+/** @typedef {import('./memo-threads.js').MemoThread} MemoThread */
+
 /**
  * Pages are numbered from 0; sizes are in the same px units as the SVG.
+ * `memos` gives a copy of its own on every call and throws an `EngineError` when the memos cannot
+ * be read; the document stays usable. `memoCaret` is null when the engine has no caret in the
+ * memo's paragraph.
+ * `pageAnchorRuns` leaves out text that is not at a place in the document, such as page numbers.
  * @typedef {{
  *   pageCount: number,
  *   pageSize(i: number): { width: number, height: number },
  *   renderPageSvg(i: number): string,
  *   pageTextRuns(i: number): TextRun[],
+ *   memos(): MemoReport,
+ *   memoCaret(thread: MemoThread): MemoCaret | null,
+ *   pageAnchorRuns(i: number): AnchorRun[],
  *   dispose(): void
  * }} EngineDocument
  */
@@ -96,6 +109,42 @@ function hasZipEnd(bytes) {
 }
 
 /**
+ * @param {HwpDocument} doc
+ * @returns {MemoReport}
+ */
+function readMemos(doc) {
+  try {
+    const { getMemos } = /** @type {{ getMemos?: () => string }} */ (/** @type {unknown} */ (doc))
+    if (!getMemos) throw new Error('the engine has no getMemos')
+    return buildMemoReport(getMemos.call(doc))
+  } catch (error) {
+    throw new EngineError('engine', String(error instanceof Error ? error.message : error))
+  }
+}
+
+/**
+ * @param {HwpDocument} doc
+ * @param {import('./memo-threads.js').MemoAnchor} anchor
+ * @param {number} char
+ * @param {number} pageCount
+ * @returns {MemoCaret | null} null for the 1 to 2 % of positions the engine has no caret for
+ */
+function caretAt(doc, { sectionIndex, ownerParaIndex, path }, char, pageCount) {
+  try {
+    const { pageIndex, x, y } = JSON.parse(
+      path && path.length > 0
+        ? doc.getCursorRectByPath(sectionIndex, ownerParaIndex, JSON.stringify(path), char)
+        : doc.getCursorRect(sectionIndex, ownerParaIndex, char)
+    )
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pageCount) return null
+    const placed = Number.isFinite(x) && Number.isFinite(y)
+    return { page: pageIndex, x: placed ? x : null, y: placed ? y : null }
+  } catch {
+    return null
+  }
+}
+
+/**
  * @param {Uint8Array} bytes
  * @returns {EngineDocument}
  */
@@ -119,8 +168,11 @@ export function openDocument(bytes) {
     throw classified
   }
   let disposed = false
+  const pageCount = doc.pageCount()
+  /** @type {MemoReport | null} */
+  let memoReport = null
   return {
-    pageCount: doc.pageCount(),
+    pageCount,
     pageSize(i) {
       const info = JSON.parse(doc.getPageInfo(i))
       return { width: Number(info.width), height: Number(info.height) }
@@ -141,6 +193,43 @@ export function openDocument(bytes) {
         fontSize: Number(run.fontSize),
         bold: Boolean(run.bold)
       }))
+    },
+    memos() {
+      if (disposed) throw new EngineError('engine', 'the document is closed')
+      memoReport ??= readMemos(doc)
+      return structuredClone(memoReport)
+    },
+    memoCaret({ anchor }) {
+      if (!anchor) return null
+      const caret = anchor.startCharIdx === null ? null : caretAt(doc, anchor, anchor.startCharIdx, pageCount)
+      if (caret) return caret
+      const paragraph = caretAt(doc, anchor, 0, pageCount)
+      return paragraph && { page: paragraph.page, x: null, y: null }
+    },
+    pageAnchorRuns(i) {
+      const layout = JSON.parse(doc.getPageTextLayout(i))
+      const runs = Array.isArray(layout.runs) ? layout.runs : []
+      return runs
+        .filter((/** @type {Record<string, unknown>} */ run) => run.charStart !== undefined && Array.isArray(run.charX))
+        .map((/** @type {Record<string, any>} */ run) => ({
+          text: String(run.text ?? ''),
+          x: Number(run.x),
+          y: Number(run.y),
+          w: Number(run.w),
+          h: Number(run.h),
+          charX: run.charX.map(Number),
+          secIdx: Number(run.secIdx),
+          paraIdx: Number(run.paraIdx),
+          charStart: Number(run.charStart),
+          ...(Array.isArray(run.cellPath) && {
+            parentParaIdx: Number(run.parentParaIdx),
+            cellPath: run.cellPath.map((/** @type {Record<string, unknown>} */ step) => ({
+              controlIndex: Number(step.controlIndex),
+              cellIndex: Number(step.cellIndex),
+              cellParaIndex: Number(step.cellParaIndex)
+            }))
+          })
+        }))
     },
     dispose() {
       if (!disposed) {

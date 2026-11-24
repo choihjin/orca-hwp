@@ -32,10 +32,7 @@ function assertRejected({ changedMember, updateTarballHash }) {
     writeFileSync(join(output, 'rhwp.d.ts'), existing)
     for (const member of Object.keys(tarball.files)) {
       const bytes = readFileSync(new URL(member.slice('package/'.length), source))
-      if (member === 'package/rhwp_bg.wasm') {
-        // The vendored WASM is the patched build, not npm's: pin the fake tarball to it.
-        tarball.files[member] = { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
-      }
+      tarball.files[member] = { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
       if (member === changedMember) bytes[0] ^= 1
       writeFileSync(join(dir, member), bytes)
     }
@@ -67,7 +64,7 @@ test('rejects a repacked rhwp tarball even when all member files match', () => {
   assertRejected({ updateTarballHash: false })
 })
 
-test('rejects a vendored WASM that is not the pinned patched build, writing nothing', () => {
+function assertPatchedRejected(changedPath) {
   const { rhwp } = structuredClone(pins)
   const { tarball } = rhwp
   assert.ok(rhwp.patched, 'pins.rhwp.patched is set')
@@ -82,7 +79,12 @@ test('rejects a vendored WASM that is not the pinned patched build, writing noth
     for (const script of ['vendor-rhwp.mjs', 'vendor-data.mjs']) {
       copyFileSync(new URL(script, import.meta.url), join(build, script))
     }
-    copyFileSync(new URL(`../${rhwp.patched.patch.path}`, import.meta.url), join(dir, rhwp.patched.patch.path))
+    for (const { path } of rhwp.patched.patches) {
+      copyFileSync(new URL(`../${path}`, import.meta.url), join(dir, path))
+    }
+    for (const file of Object.keys(rhwp.patched.files)) {
+      copyFileSync(new URL(file, source), join(output, file))
+    }
 
     for (const member of Object.keys(tarball.files)) {
       const bytes = readFileSync(new URL(member.slice('package/'.length), source))
@@ -95,10 +97,10 @@ test('rejects a vendored WASM that is not the pinned patched build, writing noth
     tarball.sha256 = createHash('sha256').update(archive).digest('hex')
     writeFileSync(join(build, 'pins.json'), JSON.stringify({ rhwp }))
 
-    // A stale WASM where the patched build should be: npm's bytes would look just like this.
-    const stale = readFileSync(new URL('rhwp_bg.wasm', source))
+    const stale = readFileSync(join(dir, changedPath))
     stale[0] ^= 1
-    writeFileSync(join(output, 'rhwp_bg.wasm'), stale)
+    writeFileSync(join(dir, changedPath), stale)
+    const before = Object.fromEntries(readdirSync(output).map(file => [file, readFileSync(join(output, file))]))
 
     const result = spawnSync(process.execPath, ['--import', mockFetch, 'build/vendor-rhwp.mjs'], {
       cwd: dir,
@@ -107,13 +109,23 @@ test('rejects a vendored WASM that is not the pinned patched build, writing noth
       timeout: 30_000,
     })
     assert.equal(result.status, 1, result.error?.message ?? (result.stderr || result.stdout))
-    assert.ok(result.stderr.includes('editor/vendor/rhwp/rhwp_bg.wasm: expected'), result.stderr)
-    assert.ok(result.stderr.includes('build/build-rhwp-patched.sh'), result.stderr)
-    assert.deepEqual(readdirSync(output), ['rhwp_bg.wasm'])
-    assert.deepEqual(readFileSync(join(output, 'rhwp_bg.wasm')), stale)
+    assert.ok(result.stderr.includes(`${changedPath}: expected`), result.stderr)
+    if (changedPath.startsWith('editor/')) assert.ok(result.stderr.includes('build/build-rhwp-patched.sh'), result.stderr)
+    assert.deepEqual(readdirSync(output), Object.keys(before))
+    for (const [file, bytes] of Object.entries(before)) assert.deepEqual(readFileSync(join(output, file)), bytes)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+for (const file of ['rhwp.js', 'rhwp.d.ts', 'rhwp_bg.wasm', 'rhwp_bg.wasm.d.ts']) {
+  test(`a changed patched file is rejected before anything is written (${file})`, () => {
+    assertPatchedRejected(`editor/vendor/rhwp/${file}`)
+  })
+}
+
+test('a changed second patch is rejected before anything is written', () => {
+  assertPatchedRejected('build/rhwp-patches/v0.8.7-memo-list.diff')
 })
 
 for (const file of ['rhwp.d.ts', 'rhwp_bg.wasm.d.ts', 'LICENSE']) {

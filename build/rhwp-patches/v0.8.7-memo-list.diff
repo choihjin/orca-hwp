@@ -1,0 +1,1187 @@
+diff --git a/src/document_core/commands/header_footer_ops.rs b/src/document_core/commands/header_footer_ops.rs
+index 5d5df586..32720795 100644
+--- a/src/document_core/commands/header_footer_ops.rs
++++ b/src/document_core/commands/header_footer_ops.rs
+@@ -1674,6 +1674,7 @@ mod tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         };
+         doc.sections.push(section);
+         let mut core = DocumentCore::new_empty();
+@@ -2249,6 +2250,7 @@ mod tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         };
+         // text_width = 28504 - 4252 - 4252 = 20000 HWPUNIT (≈266.7px) — formatting.rs의
+         // 셀 재현 테스트와 같은 축척.
+diff --git a/src/document_core/commands/object_ops/picture.rs b/src/document_core/commands/object_ops/picture.rs
+index 6f2cf59a..e18fb034 100644
+--- a/src/document_core/commands/object_ops/picture.rs
++++ b/src/document_core/commands/object_ops/picture.rs
+@@ -1960,6 +1960,7 @@ mod issue_1151_cell_picture_insert_tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+         let mut core = DocumentCore::new_empty();
+         core.set_document(doc);
+@@ -2660,6 +2661,7 @@ mod issue_1151_v2_tac_toggle_tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+         let mut core = DocumentCore::new_empty();
+         core.set_document(doc);
+@@ -3740,6 +3742,7 @@ mod issue_1280_textbox_creation_tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+         let mut core = DocumentCore::new_empty();
+         core.set_document(doc);
+diff --git a/src/document_core/commands/object_ops/shape.rs b/src/document_core/commands/object_ops/shape.rs
+index 9d327c4b..c99774f3 100644
+--- a/src/document_core/commands/object_ops/shape.rs
++++ b/src/document_core/commands/object_ops/shape.rs
+@@ -2758,6 +2758,7 @@ mod resize_clamp_tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+         let mut core = DocumentCore::new_empty();
+         // set_document이 composed/styles/pagination 벡터를 일관되게 초기화한다.
+diff --git a/src/document_core/queries/memo_list.rs b/src/document_core/queries/memo_list.rs
+new file mode 100644
+index 00000000..e31f4135
+--- /dev/null
++++ b/src/document_core/queries/memo_list.rs
+@@ -0,0 +1,451 @@
++use crate::document_core::DocumentCore;
++use crate::model::{
++    control::{Control, Field, Parameter},
++    document::MemoProblem,
++    paragraph::Paragraph,
++    shape::ShapeObject,
++};
++use crate::parser::body_text::{memo_number, MEMO_MAX_DEPTH};
++use serde::Serialize;
++use serde_json::{json, Value};
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct CellPath {
++    control_index: usize,
++    cell_index: usize,
++    cell_para_index: usize,
++}
++
++struct Reader {
++    memos: Vec<Value>,
++    problems: Vec<Value>,
++    section: usize,
++    owner: Option<usize>,
++    path: Vec<CellPath>,
++    paragraph_serial: usize,
++}
++
++fn text(paragraphs: &[Paragraph]) -> Option<String> {
++    (!paragraphs.is_empty()).then(|| {
++        paragraphs
++            .iter()
++            .map(|p| p.text.as_str())
++            .collect::<Vec<_>>()
++            .join("\n")
++    })
++}
++
++fn param<'a>(field: &'a Field, key: &str) -> Option<&'a str> {
++    field.parameters.items.iter().find_map(|p| match p {
++        Parameter::String {
++            name: Some(name),
++            value,
++            ..
++        } if name == key => Some(value.as_str()),
++        _ => None,
++    })
++}
++
++fn command_date(command: &str) -> Option<String> {
++    let mut tokens = command.strip_prefix("MEMO/")?.split('/').skip(2);
++    let low = tokens.next()?.parse::<u32>().ok()?;
++    let high = tokens.next()?.parse::<u32>().ok()?;
++    let ticks = u64::from(high) << 32 | u64::from(low);
++    (ticks != 0).then(|| filetime_to_iso(ticks))
++}
++
++impl Reader {
++    fn within_limit(&mut self, depth: usize) -> bool {
++        if depth <= MEMO_MAX_DEPTH {
++            return true;
++        }
++        self.problems.push(json!({"code":"bad-record"}));
++        false
++    }
++    fn nested(
++        &mut self,
++        paragraphs: &[Paragraph],
++        place: &'static str,
++        depth: usize,
++        cell: Option<(usize, usize)>,
++        markable: bool,
++    ) {
++        if paragraphs.is_empty() || !self.within_limit(depth) {
++            return;
++        }
++        for (pi, p) in paragraphs.iter().enumerate() {
++            if let Some((control_index, cell_index)) = cell {
++                self.path.push(CellPath {
++                    control_index,
++                    cell_index,
++                    cell_para_index: pi,
++                });
++            }
++            self.paragraph(p, pi, place, depth, markable);
++            if cell.is_some() {
++                self.path.pop();
++            }
++        }
++    }
++    fn shape(&mut self, s: &ShapeObject, ci: usize, depth: usize, markable: bool) {
++        if !self.within_limit(depth) {
++            return;
++        }
++        if let Some(tb) = s.drawing().and_then(|d| d.text_box.as_ref()) {
++            self.nested(
++                &tb.paragraphs,
++                "textBox",
++                depth + 1,
++                Some((ci, 0)),
++                markable,
++            );
++        }
++        if let Some(c) = crate::document_core::helpers::get_caption_from_shape(s) {
++            self.nested(&c.paragraphs, "caption", depth + 1, None, false);
++        }
++        if let ShapeObject::Group(g) = s {
++            // Cell paths have no group-child component.
++            for child in &g.children {
++                self.shape(child, ci, depth + 1, false);
++            }
++        }
++    }
++    fn paragraph(
++        &mut self,
++        p: &Paragraph,
++        pi: usize,
++        place: &'static str,
++        depth: usize,
++        markable: bool,
++    ) {
++        self.paragraph_serial += 1;
++        let serial = self.paragraph_serial;
++        let mut positions = None;
++        for (ci, ctrl) in p.controls.iter().enumerate() {
++            match ctrl {
++                Control::Field(f) => {
++                    let Some(number) = memo_number(f) else {
++                        continue;
++                    };
++                    let range = p.field_ranges.iter().find(|r| r.control_idx == ci);
++                    let start = range.map(|r| r.start_char_idx).unwrap_or_else(|| {
++                        positions
++                            .get_or_insert_with(|| p.control_text_positions())
++                            .get(ci)
++                            .copied()
++                            .unwrap_or_default()
++                    });
++                    let end = range.map(|r| r.end_char_idx);
++                    let length = end.map_or(usize::MAX, |e| e.saturating_sub(start));
++                    let anchor: String = p.text.chars().skip(start).take(length).collect();
++                    let key = match end {
++                        Some(end) => format!("{serial}/{start}/{end}"),
++                        None => format!("{serial}/open/{ci}"),
++                    };
++                    let body = text(&f.memo_paragraphs);
++                    if body.is_none() {
++                        self.problems
++                            .push(json!({"code":"no-body","number":number}));
++                    }
++                    let date = command_date(&f.command);
++                    let date_text = if date.is_none() {
++                        param(f, "CreateDateTime")
++                    } else {
++                        None
++                    };
++                    let author = param(f, "Author")
++                        .or_else(|| f.command.split('/').nth(5))
++                        .unwrap_or_default();
++                    self.memos.push(json!({"number":number,"place":place,"text":body,"author":author,"date":date,"dateText":date_text,
++                        "anchorText":anchor,"paragraphText":p.text,"anchorKey":key,"multiParagraph":end.is_none(),"sectionIndex":self.section,"ownerParaIndex":self.owner,
++                        "paraIndex":markable.then_some(pi),"path":markable.then_some(&self.path),"startCharIdx":markable.then_some(start),"endCharIdx":end.filter(|_|markable)}));
++                }
++                Control::Table(t) => {
++                    for (i, c) in t.cells.iter().enumerate() {
++                        self.nested(
++                            &c.paragraphs,
++                            "tableCell",
++                            depth + 1,
++                            Some((ci, i)),
++                            markable,
++                        );
++                    }
++                    if let Some(c) = &t.caption {
++                        self.nested(&c.paragraphs, "caption", depth + 1, None, false);
++                    }
++                }
++                Control::Shape(s) => self.shape(s, ci, depth, markable),
++                Control::Picture(pic) => {
++                    if let Some(c) = &pic.caption {
++                        self.nested(&c.paragraphs, "caption", depth + 1, None, false);
++                    }
++                }
++                Control::Header(h) => self.nested(&h.paragraphs, "header", depth + 1, None, false),
++                Control::Footer(h) => self.nested(&h.paragraphs, "footer", depth + 1, None, false),
++                Control::Footnote(n) => {
++                    self.nested(&n.paragraphs, "footnote", depth + 1, None, false)
++                }
++                Control::Endnote(n) => {
++                    self.nested(&n.paragraphs, "endnote", depth + 1, None, false)
++                }
++                _ => {}
++            }
++        }
++    }
++}
++
++impl DocumentCore {
++    pub fn get_memos_json(&self) -> String {
++        let mut reader = Reader {
++            memos: vec![],
++            problems: vec![],
++            section: 0,
++            owner: None,
++            path: vec![],
++            paragraph_serial: 0,
++        };
++        for (si, s) in self.document.sections.iter().enumerate() {
++            reader.section = si;
++            for problem in &s.memo_problems {
++                reader.problems.push(match problem {
++                    MemoProblem::BadRecord => json!({"code":"bad-record"}),
++                    MemoProblem::SectionUnreadable => {
++                        json!({"code":"section-unreadable","sectionIndex":si})
++                    }
++                });
++            }
++            for (pi, p) in s.paragraphs.iter().enumerate() {
++                reader.owner = Some(pi);
++                reader.paragraph(p, pi, "body", 0, true);
++            }
++            reader.owner = None;
++            for mp in &s.section_def.master_pages {
++                reader.nested(&mp.paragraphs, "masterPage", 0, None, false);
++            }
++        }
++        for (si, s) in self.document.sections.iter().enumerate() {
++            for (i, b) in s.memo_bodies.iter().enumerate() {
++                reader.memos.push(json!({"place":"unlinked","number":b.number,"author":"","date":null,"dateText":null,"text":text(&b.paragraphs),
++                    "anchorText":"","paragraphText":"","multiParagraph":false,"anchorKey":format!("unlinked/{si}/{i}"),
++                    "sectionIndex":null,"ownerParaIndex":null,"paraIndex":null,"path":null,"startCharIdx":null,"endCharIdx":null}));
++                reader
++                    .problems
++                    .push(json!({"code":"unlinked-body","number":b.number}));
++            }
++        }
++        json!({"memos":reader.memos,"problems":reader.problems}).to_string()
++    }
++}
++
++fn filetime_to_iso(ft: u64) -> String {
++    const SECS_1601_TO_1970: i64 = 11_644_473_600;
++    let secs = (ft / 10_000_000) as i64 - SECS_1601_TO_1970;
++    let days = secs.div_euclid(86_400);
++    let rem = secs.rem_euclid(86_400);
++    // Howard Hinnant, civil_from_days (proleptic Gregorian).
++    let z = days + 719_468;
++    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
++    let doe = z - era * 146_097;
++    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
++    let y = yoe + era * 400;
++    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
++    let mp = (5 * doy + 2) / 153;
++    let d = doy - (153 * mp + 2) / 5 + 1;
++    let m = if mp < 10 { mp + 3 } else { mp - 9 };
++    let year = y + i64::from(m <= 2);
++    format!(
++        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
++        year,
++        m,
++        d,
++        rem / 3600,
++        (rem % 3600) / 60,
++        rem % 60
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use crate::document_core::DocumentCore;
++    use crate::model::{
++        control::{Control, Field},
++        document::{MemoBody, MemoProblem, Section},
++        footnote::{Endnote, Footnote},
++        header_footer::{Footer, Header, MasterPage},
++        image::Picture,
++        paragraph::{FieldRange, Paragraph},
++        shape::{Caption, DrawingObjAttr, GroupShape, RectangleShape, ShapeObject, TextBox},
++        table::{Cell, Table},
++    };
++    use serde_json::Value;
++
++    fn memo(n: u32) -> Paragraph {
++        Paragraph {
++            text: "😀예산".into(),
++            controls: vec![Control::Field(Field {
++                memo_index: n,
++                command: "MEMO/65535/4/2169694768/31291592/재무 담당/".into(),
++                memo_paragraphs: vec![Paragraph::default()],
++                ..Default::default()
++            })],
++            field_ranges: vec![FieldRange {
++                start_char_idx: 1,
++                end_char_idx: 3,
++                ..Default::default()
++            }],
++            ..Default::default()
++        }
++    }
++    fn read(section: Section) -> Value {
++        let mut core = DocumentCore::new_empty();
++        core.document.sections = vec![section];
++        serde_json::from_str(&core.get_memos_json()).unwrap()
++    }
++    fn textbox(n: u32) -> ShapeObject {
++        ShapeObject::Rectangle(RectangleShape {
++            drawing: DrawingObjAttr {
++                text_box: Some(TextBox {
++                    paragraphs: vec![memo(n)],
++                    ..Default::default()
++                }),
++                ..Default::default()
++            },
++            ..Default::default()
++        })
++    }
++    fn caption(n: u32) -> Caption {
++        Caption {
++            paragraphs: vec![memo(n)],
++            ..Default::default()
++        }
++    }
++    #[test]
++    fn walks_all_paragraph_owners_in_document_order() {
++        let mut nested = memo(2);
++        nested.controls.push(Control::Footnote(Box::new(Footnote {
++            paragraphs: vec![memo(3)],
++            ..Default::default()
++        })));
++        let mut p = memo(1);
++        p.controls.extend([
++            Control::Table(Box::new(Table {
++                cells: vec![
++                    Cell {
++                        paragraphs: vec![nested],
++                        ..Default::default()
++                    },
++                    Cell {
++                        paragraphs: vec![memo(4)],
++                        ..Default::default()
++                    },
++                ],
++                caption: Some(caption(5)),
++                ..Default::default()
++            })),
++            Control::Shape(Box::new(textbox(6))),
++            Control::Shape(Box::new(ShapeObject::Group(GroupShape {
++                children: vec![textbox(7)],
++                ..Default::default()
++            }))),
++            Control::Picture(Box::new(Picture {
++                caption: Some(caption(8)),
++                ..Default::default()
++            })),
++            Control::Header(Box::new(Header {
++                paragraphs: vec![memo(9)],
++                ..Default::default()
++            })),
++            Control::Footer(Box::new(Footer {
++                paragraphs: vec![memo(10)],
++                ..Default::default()
++            })),
++            Control::Footnote(Box::new(Footnote {
++                paragraphs: vec![memo(11)],
++                ..Default::default()
++            })),
++            Control::Endnote(Box::new(Endnote {
++                paragraphs: vec![memo(12)],
++                ..Default::default()
++            })),
++        ]);
++        let mut s = Section {
++            paragraphs: vec![p],
++            ..Default::default()
++        };
++        s.section_def.master_pages.push(MasterPage {
++            paragraphs: vec![memo(13)],
++            ..Default::default()
++        });
++        let report = read(s);
++        let memos = report["memos"].as_array().unwrap();
++        let places = [
++            "body",
++            "tableCell",
++            "footnote",
++            "tableCell",
++            "caption",
++            "textBox",
++            "textBox",
++            "caption",
++            "header",
++            "footer",
++            "footnote",
++            "endnote",
++            "masterPage",
++        ];
++        assert_eq!(memos.len(), places.len());
++        for (i, (m, place)) in memos.iter().zip(places).enumerate() {
++            assert_eq!(m["number"], i + 1);
++            assert_eq!(m["place"], place);
++            assert_eq!(m["anchorText"], "예산");
++            assert_eq!(m["author"], "재무 담당");
++            assert_eq!(m["date"], "2026-11-20T08:24:04Z");
++        }
++        assert_eq!(memos[1]["path"][0]["cellIndex"], 0);
++        assert_eq!(memos[3]["path"][0]["cellIndex"], 1);
++        assert!(memos[2]["path"].is_null());
++        assert!(memos[12]["ownerParaIndex"].is_null());
++        assert_eq!(report["problems"], serde_json::json!([]));
++    }
++    #[test]
++    fn multi_paragraph_empty_range_and_missing_bodies() {
++        let mut a = memo(1);
++        a.field_ranges.clear();
++        let Control::Field(f) = &mut a.controls[0] else {
++            unreachable!()
++        };
++        f.memo_paragraphs.clear();
++        let mut b = memo(2);
++        b.field_ranges[0].end_char_idx = 1;
++        let report = read(Section {
++            paragraphs: vec![a, b],
++            memo_bodies: vec![MemoBody {
++                number: 8,
++                paragraphs: vec![Paragraph {
++                    text: "lost".into(),
++                    ..Default::default()
++                }],
++            }],
++            memo_problems: vec![MemoProblem::SectionUnreadable],
++            ..Default::default()
++        });
++        let m = &report["memos"];
++        assert_eq!(m[0]["multiParagraph"], true);
++        assert!(m[0]["endCharIdx"].is_null());
++        assert!(m[0]["text"].is_null());
++        assert_eq!(m[1]["multiParagraph"], false);
++        assert_eq!(m[1]["startCharIdx"], m[1]["endCharIdx"]);
++        assert_eq!(m[1]["text"], "");
++        assert_eq!(m[2]["place"], "unlinked");
++        assert_eq!(m[2]["text"], "lost");
++        let problems = report["problems"].as_array().unwrap();
++        for p in [
++            serde_json::json!({"code":"section-unreadable","sectionIndex":0}),
++            serde_json::json!({"code":"unlinked-body","number":8}),
++            serde_json::json!({"code":"no-body","number":1}),
++        ] {
++            assert!(problems.contains(&p));
++        }
++    }
++}
+diff --git a/src/document_core/queries/mod.rs b/src/document_core/queries/mod.rs
+index 3a1f8c12..f2d7dd35 100644
+--- a/src/document_core/queries/mod.rs
++++ b/src/document_core/queries/mod.rs
+@@ -12,6 +12,7 @@ pub mod field_query;
+ mod font_decision;
+ mod font_metric_coverage;
+ mod form_query;
++mod memo_list;
+ pub mod hwpctrl_sets;
+ pub mod hyperlink_geometry;
+ pub mod rendering;
+diff --git a/src/document_core/queries/rendering.rs b/src/document_core/queries/rendering.rs
+index c435fd5f..8e460d3c 100644
+--- a/src/document_core/queries/rendering.rs
++++ b/src/document_core/queries/rendering.rs
+@@ -9177,6 +9177,7 @@ mod tests {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+ 
+         let mut core = DocumentCore::new_empty();
+@@ -9332,6 +9333,7 @@ mod tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+ 
+         let mut core = DocumentCore::new_empty();
+@@ -9379,6 +9381,7 @@ mod tests {
+                 paragraphs: vec![Paragraph::default()],
+                 raw_stream: None,
+                 raw_provenance: None,
++                ..Default::default()
+             }
+         }
+ 
+@@ -9450,6 +9453,7 @@ mod tests {
+                 paragraphs: vec![Paragraph::default()],
+                 raw_stream: None,
+                 raw_provenance: None,
++                ..Default::default()
+             }
+         }
+ 
+@@ -9514,6 +9518,7 @@ mod tests {
+                 paragraphs: vec![Paragraph::default()],
+                 raw_stream: None,
+                 raw_provenance: None,
++                ..Default::default()
+             }
+         }
+ 
+@@ -9572,6 +9577,7 @@ mod tests {
+             paragraphs: vec![Paragraph::default()],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         });
+         core.set_document(document);
+         core.paginate();
+diff --git a/src/model/document.rs b/src/model/document.rs
+index a83677f7..39a39926 100644
+--- a/src/model/document.rs
++++ b/src/model/document.rs
+@@ -274,9 +274,24 @@ pub fn print_method_implies_nup(print_method: Option<u32>) -> bool {
+     matches!(print_method, Some(4) | Some(5))
+ }
+ 
++/// A detached body from a HWP5 section tail.
++#[derive(Debug, Clone)]
++pub struct MemoBody {
++    pub number: u32,
++    pub paragraphs: Vec<Paragraph>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum MemoProblem {
++    BadRecord,
++    SectionUnreadable,
++}
++
+ /// 본문의 구역 (Section)
+ #[derive(Debug, Clone, Default)]
+ pub struct Section {
++    pub memo_bodies: Vec<MemoBody>,
++    pub memo_problems: Vec<MemoProblem>,
+     /// 구역 정의
+     pub section_def: SectionDef,
+     /// 문단 리스트
+diff --git a/src/model/raw_provenance.rs b/src/model/raw_provenance.rs
+index 80a2ee41..c3f9fcc7 100644
+--- a/src/model/raw_provenance.rs
++++ b/src/model/raw_provenance.rs
+@@ -253,6 +253,8 @@ pub struct SectionSeal {
+ /// Section 모델 상태의 다이제스트 — raw 캐시 필드는 전수 구조분해로 뺀다.
+ pub fn section_model_digest(section: &crate::model::document::Section) -> [u8; 32] {
+     let crate::model::document::Section {
++        memo_bodies: _,
++        memo_problems: _,
+         section_def,
+         paragraphs,
+         raw_stream: _,
+diff --git a/src/parser/body_text.rs b/src/parser/body_text.rs
+index 036e8bf5..142f48db 100644
+--- a/src/parser/body_text.rs
++++ b/src/parser/body_text.rs
+@@ -22,7 +22,7 @@ use super::tags;
+ mod drawing_text_structure;
+ 
+ use crate::model::control::{Control, UnknownControl};
+-use crate::model::document::{RawRecord, Section, SectionDef};
++use crate::model::document::{MemoBody, MemoProblem, RawRecord, Section, SectionDef};
+ use crate::model::footnote::FootnoteShape;
+ use crate::model::header_footer::{HeaderFooterApply, MasterPage};
+ use crate::model::page::{
+@@ -79,7 +79,12 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
+     let records = Record::read_all(data).map_err(|e| BodyTextError::RecordError(e.to_string()))?;
+     drawing_text_structure::validate(&records)?;
+ 
+-    let mut section = Section::default();
++    let (records, memo_bodies, memo_problems) = split_memo_tail(records);
++    let mut section = Section {
++        memo_bodies,
++        memo_problems,
++        ..Default::default()
++    };
+     let mut idx = 0;
+ 
+     while idx < records.len() {
+@@ -116,7 +121,7 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
+     // level=1로 태그되어 마지막 문단의 자식으로 오인됨.
+     // 전체 레코드를 재스캔하여 마지막 PARA_HEADER(level=0) 이후의 LIST_HEADER(level=1)를 추출.
+     {
+-        let all_records = Record::read_all(data).unwrap_or_default();
++        let all_records = &records;
+         let last_para0_idx = all_records
+             .iter()
+             .rposition(|r| r.tag_id == tags::HWPTAG_PARA_HEADER && r.level == 0);
+@@ -149,6 +154,177 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
+     Ok(section)
+ }
+ 
++fn split_memo_tail(mut records: Vec<Record>) -> (Vec<Record>, Vec<MemoBody>, Vec<MemoProblem>) {
++    let is_memo = |r: &Record| r.level == 1 && r.tag_id == tags::HWPTAG_MEMO_LIST;
++    let after_body = records
++        .iter()
++        .rposition(|r| r.level == 0 && r.tag_id == tags::HWPTAG_PARA_HEADER)
++        .map_or(0, |i| i + 1);
++    let Some(offset) = records[after_body..].iter().position(is_memo) else {
++        return (records, vec![], vec![]);
++    };
++    let mut tail = records
++        .split_off(after_body + offset)
++        .into_iter()
++        .peekable();
++    let mut bodies = Vec::new();
++    let mut problems = Vec::new();
++    while let Some(head) = tail.next() {
++        if !is_memo(&head) {
++            records.push(head);
++            continue;
++        }
++        if !tail
++            .peek()
++            .is_some_and(|r| r.level == 1 && r.tag_id == tags::HWPTAG_LIST_HEADER)
++        {
++            problems.push(MemoProblem::BadRecord);
++            continue;
++        }
++        let header = tail.next().unwrap();
++        let mut children = Vec::new();
++        while tail.peek().is_some_and(|r| {
++            !(r.level == 1 && matches!(r.tag_id, tags::HWPTAG_LIST_HEADER | tags::HWPTAG_MEMO_LIST))
++        }) {
++            children.push(tail.next().unwrap());
++        }
++        let (Some(number), Some(count)) =
++            (head.data.first_chunk::<4>(), header.data.first_chunk::<2>())
++        else {
++            problems.push(MemoProblem::BadRecord);
++            continue;
++        };
++        let mut paragraphs = Vec::new();
++        let mut rest = children.as_slice();
++        while let Some(first) = rest.first() {
++            if first.tag_id != tags::HWPTAG_PARA_HEADER || first.data.len() < 22 {
++                problems.push(MemoProblem::BadRecord);
++                break;
++            }
++            let end = rest[1..]
++                .iter()
++                .position(|r| r.level <= first.level)
++                .map_or(rest.len(), |i| i + 1);
++            match parse_paragraph(&rest[..end]) {
++                Ok(p) => paragraphs.push(p),
++                Err(_) => problems.push(MemoProblem::BadRecord),
++            }
++            rest = &rest[end..];
++        }
++        if paragraphs.is_empty() || paragraphs.len() != u16::from_le_bytes(*count) as usize {
++            problems.push(MemoProblem::BadRecord);
++        }
++        if !paragraphs.is_empty() {
++            link_orphan_field_ends(&mut paragraphs);
++            bodies.push(MemoBody {
++                number: u32::from_le_bytes(*number),
++                paragraphs,
++            });
++        }
++    }
++    (records, bodies, problems)
++}
++
++pub(crate) fn memo_number(field: &crate::model::control::Field) -> Option<u32> {
++    use crate::model::control::FieldType;
++    if field.field_type != FieldType::Memo && !field.command.starts_with("MEMO/") {
++        return None;
++    }
++    Some(if field.memo_index != 0 {
++        field.memo_index
++    } else {
++        field
++            .command
++            .split('/')
++            .nth(2)
++            .and_then(|n| n.parse().ok())
++            .unwrap_or(0)
++    })
++}
++
++pub(crate) const MEMO_MAX_DEPTH: usize = 8; // Same as injection_scan::MAX_DEPTH.
++
++/// Read across sections in field order. Queues also preserve the order of duplicate numbers.
++pub fn attach_memo_bodies(sections: &mut [Section]) {
++    use crate::model::shape::ShapeObject;
++    use std::collections::{HashMap, VecDeque};
++    if sections.iter().all(|s| s.memo_bodies.is_empty()) {
++        return;
++    }
++    type Bodies = HashMap<u32, VecDeque<(usize, usize, MemoBody)>>;
++    fn shape(s: &mut ShapeObject, depth: usize, bodies: &mut Bodies) {
++        if depth > MEMO_MAX_DEPTH {
++            return;
++        }
++        if let Some(tb) = s.drawing_mut().and_then(|d| d.text_box.as_mut()) {
++            walk(&mut tb.paragraphs, depth + 1, bodies);
++        }
++        if let Some(c) = crate::document_core::helpers::get_caption_from_shape_mut(s) {
++            walk(&mut c.paragraphs, depth + 1, bodies);
++        }
++        if let ShapeObject::Group(g) = s {
++            for child in &mut g.children {
++                shape(child, depth + 1, bodies);
++            }
++        }
++    }
++    fn walk(ps: &mut [Paragraph], depth: usize, bodies: &mut Bodies) {
++        if depth > MEMO_MAX_DEPTH {
++            return;
++        }
++        for p in ps {
++            for ctrl in &mut p.controls {
++                match ctrl {
++                    Control::Field(f) if f.memo_paragraphs.is_empty() => {
++                        if let Some((_, _, b)) = memo_number(f)
++                            .and_then(|n| bodies.get_mut(&n))
++                            .and_then(VecDeque::pop_front)
++                        {
++                            f.memo_paragraphs = b.paragraphs;
++                        }
++                    }
++                    Control::Table(t) => {
++                        for c in &mut t.cells {
++                            walk(&mut c.paragraphs, depth + 1, bodies);
++                        }
++                        if let Some(c) = &mut t.caption {
++                            walk(&mut c.paragraphs, depth + 1, bodies);
++                        }
++                    }
++                    Control::Shape(s) => shape(s, depth, bodies),
++                    Control::Picture(p) => {
++                        if let Some(c) = &mut p.caption {
++                            walk(&mut c.paragraphs, depth + 1, bodies);
++                        }
++                    }
++                    Control::Header(h) => walk(&mut h.paragraphs, depth + 1, bodies),
++                    Control::Footer(h) => walk(&mut h.paragraphs, depth + 1, bodies),
++                    Control::Footnote(n) => walk(&mut n.paragraphs, depth + 1, bodies),
++                    Control::Endnote(n) => walk(&mut n.paragraphs, depth + 1, bodies),
++                    _ => {}
++                }
++            }
++        }
++    }
++    let mut bodies = Bodies::new();
++    for (si, s) in sections.iter_mut().enumerate() {
++        for (i, b) in s.memo_bodies.drain(..).enumerate() {
++            bodies.entry(b.number).or_default().push_back((si, i, b));
++        }
++    }
++    for s in sections.iter_mut() {
++        walk(&mut s.paragraphs, 0, &mut bodies);
++        for m in &mut s.section_def.master_pages {
++            walk(&mut m.paragraphs, 0, &mut bodies);
++        }
++    }
++    let mut remaining: Vec<_> = bodies.into_values().flatten().collect();
++    remaining.sort_by_key(|(si, i, _)| (*si, *i));
++    for (si, _, b) in remaining {
++        sections[si].memo_bodies.push(b);
++    }
++}
++
+ /// 다단락 필드의 종료 마커에 짝 `fieldBegin` 의 id 를 채운다.
+ ///
+ /// PARA_TEXT 의 종료 마커에는 짝 id 가 없어서(`04 00 6b 6c 63 09 01 00 …` — ctrl_id
+@@ -1262,3 +1438,149 @@ fn parse_ctrl_data_field_name(data: &[u8]) -> Option<String> {
+ 
+ #[cfg(test)]
+ mod tests;
++
++#[cfg(test)]
++mod memo_tail_tests {
++    use super::*;
++    use crate::model::control::Field;
++    use crate::model::document::{MemoBody, MemoProblem};
++
++    fn record(tag: u16, level: u16, data: &[u8]) -> Vec<u8> {
++        let header = tag as u32 | ((level as u32) << 10) | ((data.len() as u32) << 20);
++        [header.to_le_bytes().as_slice(), data].concat()
++    }
++    fn para(level: u16) -> Vec<u8> {
++        record(tags::HWPTAG_PARA_HEADER, level, &[0; 22])
++    }
++    fn tail() -> Vec<u8> {
++        [
++            record(tags::HWPTAG_MEMO_LIST, 1, &7u32.to_le_bytes()),
++            record(tags::HWPTAG_LIST_HEADER, 1, &[2, 0, 0, 0, 0, 0, 0, 0]),
++            para(2),
++            para(2),
++        ]
++        .concat()
++    }
++    #[test]
++    fn memo_tail_is_not_part_of_last_paragraph() {
++        let before = parse_body_text_section(&para(0)).unwrap();
++        let section = parse_body_text_section(&[para(0), tail()].concat()).unwrap();
++        assert_eq!(section.memo_bodies.len(), 1);
++        assert_eq!(section.memo_bodies[0].number, 7);
++        assert_eq!(section.memo_bodies[0].paragraphs.len(), 2);
++        assert_eq!(
++            section.paragraphs[0].controls.len(),
++            before.paragraphs[0].controls.len()
++        );
++    }
++    #[test]
++    fn memo_tail_keeps_extended_master_pages() {
++        let mut list = [0; 20];
++        list[8] = 1;
++        list[18] = 2;
++        let master = [record(tags::HWPTAG_LIST_HEADER, 1, &list), para(2)].concat();
++        let before = parse_body_text_section(&[para(0), master.clone()].concat()).unwrap();
++        assert_eq!(before.section_def.master_pages.len(), 1);
++        for bytes in [
++            [para(0), master.clone(), tail()].concat(),
++            [para(0), tail(), master].concat(),
++        ] {
++            let section = parse_body_text_section(&bytes).unwrap();
++            assert_eq!(
++                serde_json::to_vec(&section.section_def.master_pages).unwrap(),
++                serde_json::to_vec(&before.section_def.master_pages).unwrap()
++            );
++        }
++    }
++    #[test]
++    fn no_memo_tail_parses_as_before() {
++        let section = parse_body_text_section(&para(0)).unwrap();
++        assert!(section.memo_bodies.is_empty() && section.memo_problems.is_empty());
++    }
++    #[test]
++    fn no_memo_section_digest_is_unchanged() {
++        #[derive(serde::Serialize)]
++        struct PreviousFingerprint<'a> {
++            section_def: &'a SectionDef,
++            paragraphs: &'a [Paragraph],
++        }
++        let section = parse_body_text_section(&para(0)).unwrap();
++        let bytes = serde_json::to_vec(&PreviousFingerprint {
++            section_def: &section.section_def,
++            paragraphs: &section.paragraphs,
++        })
++        .unwrap();
++        assert_eq!(
++            crate::model::raw_provenance::section_model_digest(&section),
++            *blake3::hash(&bytes).as_bytes()
++        );
++    }
++    #[test]
++    fn truncated_memo_head_is_reported() {
++        let section =
++            parse_body_text_section(&[para(0), record(tags::HWPTAG_MEMO_LIST, 1, &[7])].concat())
++                .unwrap();
++        assert_eq!(section.memo_problems, vec![MemoProblem::BadRecord]);
++    }
++    fn body(text: &str) -> MemoBody {
++        MemoBody {
++            number: 3,
++            paragraphs: vec![Paragraph {
++                text: text.into(),
++                ..Default::default()
++            }],
++        }
++    }
++    fn field() -> Control {
++        Control::Field(Field {
++            command: "MEMO/0/3".into(),
++            ..Default::default()
++        })
++    }
++    fn body_text(ctrl: &Control) -> &str {
++        let Control::Field(f) = ctrl else { panic!() };
++        &f.memo_paragraphs[0].text
++    }
++    #[test]
++    fn bodies_attach_across_sections() {
++        let mut sections = [
++            Section {
++                paragraphs: vec![Paragraph {
++                    controls: vec![field()],
++                    ..Default::default()
++                }],
++                ..Default::default()
++            },
++            Section {
++                memo_bodies: vec![body("a")],
++                ..Default::default()
++            },
++        ];
++        attach_memo_bodies(&mut sections);
++        assert_eq!(body_text(&sections[0].paragraphs[0].controls[0]), "a");
++        assert!(sections[1].memo_bodies.is_empty());
++    }
++    #[test]
++    fn duplicate_numbers_fill_first_empty_field() {
++        let mut section = Section {
++            paragraphs: vec![Paragraph {
++                controls: vec![field(), field()],
++                ..Default::default()
++            }],
++            memo_bodies: vec![body("a"), body("b")],
++            ..Default::default()
++        };
++        attach_memo_bodies(std::slice::from_mut(&mut section));
++        assert_eq!(body_text(&section.paragraphs[0].controls[0]), "a");
++        assert_eq!(body_text(&section.paragraphs[0].controls[1]), "b");
++    }
++    #[test]
++    fn unmatched_body_stays_unlinked() {
++        let mut section = Section {
++            memo_bodies: vec![body("a")],
++            ..Default::default()
++        };
++        attach_memo_bodies(std::slice::from_mut(&mut section));
++        assert_eq!(section.memo_bodies[0].paragraphs[0].text, "a");
++    }
++}
+diff --git a/src/parser/hml/adapter.rs b/src/parser/hml/adapter.rs
+index 2f97f1f7..30bf5c76 100644
+--- a/src/parser/hml/adapter.rs
++++ b/src/parser/hml/adapter.rs
+@@ -46,6 +46,7 @@ pub(crate) fn into_document(mut source: HmlSource) -> Result<Document, HmlError>
+             paragraphs,
+             raw_provenance: None,
+             raw_stream: None,
++            ..Default::default()
+         });
+     }
+     document.doc_properties.section_count = document.sections.len() as u16;
+diff --git a/src/parser/hwp3/mod.rs b/src/parser/hwp3/mod.rs
+index 87e5107d..4a031bdf 100644
+--- a/src/parser/hwp3/mod.rs
++++ b/src/parser/hwp3/mod.rs
+@@ -4599,6 +4599,7 @@ fn parse_hwp3_inner(
+         paragraphs,
+         raw_provenance: None,
+         raw_stream: None,
++        ..Default::default()
+     };
+     doc.sections.push(section);
+ 
+diff --git a/src/parser/mod.rs b/src/parser/mod.rs
+index e4467db3..983154bc 100644
+--- a/src/parser/mod.rs
++++ b/src/parser/mod.rs
+@@ -883,7 +883,10 @@ fn parse_sections_strict(
+             Err(e) => {
+                 // 개별 섹션 파싱 실패 시 빈 섹션으로 대체 (전체 실패 방지)
+                 eprintln!("경고: Section{} 파싱 실패: {}", i, e);
+-                sections.push(crate::model::document::Section::default());
++                sections.push(crate::model::document::Section {
++                    memo_problems: vec![crate::model::document::MemoProblem::SectionUnreadable],
++                    ..Default::default()
++                });
+             }
+         }
+     }
+@@ -891,6 +894,7 @@ fn parse_sections_strict(
+     // [#6868 잔여] 구역 경계를 넘는 누름틀의 종료 마커를 잇는다 — 구역 하나를 파싱하는
+     // 동안에는 앞 구역에서 열린 필드를 볼 수 없다.
+     body_text::link_orphan_field_ends_across_sections(&mut sections);
++    body_text::attach_memo_bodies(&mut sections);
+ 
+     Ok(sections)
+ }
+@@ -1000,13 +1004,17 @@ fn parse_hwp_with_lenient(
+             }
+             Err(e) => {
+                 eprintln!("경고: Section{} 파싱 실패 (lenient): {}", i, e);
+-                sections.push(crate::model::document::Section::default());
++                sections.push(crate::model::document::Section {
++                    memo_problems: vec![crate::model::document::MemoProblem::SectionUnreadable],
++                    ..Default::default()
++                });
+             }
+         }
+     }
+ 
+     // [#6868 잔여] 구역 경계를 넘는 누름틀의 종료 마커 — strict 경로와 같다.
+     body_text::link_orphan_field_ends_across_sections(&mut sections);
++    body_text::attach_memo_bodies(&mut sections);
+ 
+     // BinData 로드 시도
+     let bin_data_content = load_bin_data_content_lenient(
+diff --git a/src/serializer/body_text.rs b/src/serializer/body_text.rs
+index 0e94a086..bbea945a 100644
+--- a/src/serializer/body_text.rs
++++ b/src/serializer/body_text.rs
+@@ -2631,6 +2631,7 @@ mod tests {
+             paragraphs: vec![para],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         };
+ 
+         let bytes = serialize_section(&section);
+diff --git a/src/serializer/cfb_writer.rs b/src/serializer/cfb_writer.rs
+index 721a6ce4..66c76db7 100644
+--- a/src/serializer/cfb_writer.rs
++++ b/src/serializer/cfb_writer.rs
+@@ -171,6 +171,7 @@ fn serialize_hwp_inner(
+                 paragraphs,
+                 raw_stream: None,
+                 raw_provenance: None,
++                ..Default::default()
+             };
+             let prepared =
+                 super::form_identity::prepare_section(&sub, doc, &mut form_id_allocator)?;
+diff --git a/src/serializer/cfb_writer/tests.rs b/src/serializer/cfb_writer/tests.rs
+index 633c65cf..7982bb8f 100644
+--- a/src/serializer/cfb_writer/tests.rs
++++ b/src/serializer/cfb_writer/tests.rs
+@@ -64,6 +64,7 @@ fn test_serialize_hwp_cfb_streams() {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         }],
+         preview: None,
+         bin_data_content: Vec::new(),
+@@ -212,6 +213,7 @@ fn test_full_roundtrip_uncompressed() {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         }],
+         preview: None,
+         bin_data_content: Vec::new(),
+@@ -293,6 +295,7 @@ fn test_full_roundtrip_compressed() {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         }],
+         preview: None,
+         bin_data_content: Vec::new(),
+@@ -1683,6 +1686,7 @@ fn test_ole_storage_size_prefix_restored() {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         }],
+         preview: None,
+         bin_data_content: vec![BinDataContent {
+@@ -1771,6 +1775,7 @@ fn test_compressed_ole_storage_payload_is_deflated() {
+             }],
+             raw_stream: None,
+             raw_provenance: None,
++            ..Default::default()
+         }],
+         preview: None,
+         bin_data_content: vec![BinDataContent {
+diff --git a/src/wasm_api.rs b/src/wasm_api.rs
+index 2031085e..5882a2ee 100644
+--- a/src/wasm_api.rs
++++ b/src/wasm_api.rs
+@@ -5177,6 +5177,12 @@ impl HwpDocument {
+ 
+     // ─── 필드 API (Task 230) ─────────────────────────────────
+ 
++    /// 메모와 읽기 문제를 문서 순서로 반환한다.
++    #[wasm_bindgen(js_name = getMemos)]
++    pub fn get_memos(&self) -> String {
++        self.get_memos_json()
++    }
++
+     /// 문서 내 모든 필드 목록을 JSON 배열로 반환한다.
+     ///
+     /// 반환: `[{fieldId, fieldType, name, guide, command, value, location}]`
+diff --git a/src/wasm_api/tests.rs b/src/wasm_api/tests.rs
+index 72adaf63..52933361 100644
+--- a/src/wasm_api/tests.rs
++++ b/src/wasm_api/tests.rs
+@@ -1808,6 +1808,7 @@ fn test_document_with_paragraphs() {
+         ],
+         raw_stream: None,
+         raw_provenance: None,
++        ..Default::default()
+     });
+     doc.set_document(document);
+ 
+@@ -2018,6 +2019,7 @@ fn create_doc_with_table() -> HwpDocument {
+         paragraphs: vec![parent_para],
+         raw_stream: None,
+         raw_provenance: None,
++        ..Default::default()
+     });
+     doc.set_document(document);
+     doc
+@@ -2105,6 +2107,7 @@ fn create_doc_with_page_count_boundary_table() -> HwpDocument {
+         paragraphs: vec![parent_para],
+         raw_stream: None,
+         raw_provenance: None,
++        ..Default::default()
+     });
+     doc.set_document(document);
+     doc
+@@ -4469,6 +4472,7 @@ fn create_doc_with_floating_picture(tac: bool, voff: u32, hoff: u32) -> HwpDocum
+         paragraphs: vec![pic_para, Paragraph::default()],
+         raw_stream: None,
+         raw_provenance: None,
++        ..Default::default()
+     });
+     doc.set_document(document);
+     doc
+diff --git a/tests/cases/issue_5769_stage4_setter_convergence.rs b/tests/cases/issue_5769_stage4_setter_convergence.rs
+index 3df7cca0..d182a13d 100644
+--- a/tests/cases/issue_5769_stage4_setter_convergence.rs
++++ b/tests/cases/issue_5769_stage4_setter_convergence.rs
+@@ -219,6 +219,7 @@ fn two_section_core() -> DocumentCore {
+         paragraphs: vec![Paragraph::default()],
+         raw_stream: None,
+         raw_provenance: None,
++        ..Default::default()
+     };
+     let mut doc = Document::default();
+     doc.sections.push(make_section());

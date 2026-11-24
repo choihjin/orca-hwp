@@ -1,3 +1,15 @@
+diff --git a/src/diagnostics/ir_field_sweep.rs b/src/diagnostics/ir_field_sweep.rs
+index 987daa24..a0d92c02 100644
+--- a/src/diagnostics/ir_field_sweep.rs
++++ b/src/diagnostics/ir_field_sweep.rs
+@@ -645,6 +645,7 @@ fn sweep_paragraph(base: &str, a: &Paragraph, b: &Paragraph, out: &mut Divergenc
+         line_segs,
+         range_tags,
+         field_ranges,
++        memo_field_marks: _,
+         orphan_field_ends,
+         controls,
+         ctrl_data_records,
 diff --git a/src/document_core/commands/header_footer_ops.rs b/src/document_core/commands/header_footer_ops.rs
 index 5d5df586..32720795 100644
 --- a/src/document_core/commands/header_footer_ops.rs
@@ -60,14 +72,14 @@ index 9d327c4b..c99774f3 100644
          // set_document이 composed/styles/pagination 벡터를 일관되게 초기화한다.
 diff --git a/src/document_core/queries/memo_list.rs b/src/document_core/queries/memo_list.rs
 new file mode 100644
-index 00000000..5c2b0293
+index 00000000..ab1e0de0
 --- /dev/null
 +++ b/src/document_core/queries/memo_list.rs
-@@ -0,0 +1,961 @@
+@@ -0,0 +1,1317 @@
 +use crate::document_core::DocumentCore;
 +use crate::model::{
 +    control::{Control, Field, Parameter},
-+    paragraph::Paragraph,
++    paragraph::{MemoFieldMark, Paragraph},
 +    shape::ShapeObject,
 +};
 +use crate::parser::body_text::{memo_number, MEMO_MAX_DEPTH};
@@ -111,6 +123,7 @@ index 00000000..5c2b0293
 +    owner_para_index: Option<usize>,
 +    para_index: Option<usize>,
 +    path: Option<&'a [CellPath]>,
++    inline_before: Option<usize>,
 +    start_char_idx: Option<usize>,
 +    end_char_idx: Option<usize>,
 +}
@@ -252,29 +265,213 @@ index 00000000..5c2b0293
 +    Ok(Some(Cow::Owned(text)))
 +}
 +
-+struct Anchors<'a> {
++#[derive(Clone, Copy)]
++struct MemoRange {
++    control_idx: usize,
++    start: usize,
++    end: Option<usize>,
++    inner_slot_count: usize,
++}
++
++struct OpenField {
++    id: u32,
++    previous_same_id: Option<usize>,
++    paragraph: usize,
++    memo: Option<usize>,
++}
++
++// A body can continue in the next paragraph or section. Each cell, caption,
++// note and text box owns a separate field stack. Index by ID for crossing ranges
++// and retain the opening order for ends with an absent or unmatched reference.
++#[derive(Default)]
++struct FieldScope {
++    open: Vec<Option<OpenField>>,
++    last: std::collections::HashMap<u32, usize>,
++}
++impl FieldScope {
++    fn ranges(&mut self, p: &Paragraph, serial: usize) -> Vec<MemoRange> {
++        let mut ranges = Vec::new();
++        for &mark in &p.memo_field_marks {
++            match mark {
++                MemoFieldMark::Begin { control_idx, pos } => {
++                    let Some(Control::Field(f)) = p.controls.get(control_idx) else {
++                        continue;
++                    };
++                    let memo = memo_number(f).map(|_| {
++                        ranges.push(MemoRange {
++                            control_idx,
++                            start: pos,
++                            end: None,
++                            inner_slot_count: 0,
++                        });
++                        ranges.len() - 1
++                    });
++                    let previous_same_id = if f.field_id == 0 {
++                        None
++                    } else {
++                        self.last.insert(f.field_id, self.open.len())
++                    };
++                    self.open.push(Some(OpenField {
++                        id: f.field_id,
++                        previous_same_id,
++                        paragraph: serial,
++                        memo,
++                    }));
++                }
++                MemoFieldMark::End {
++                    begin_id,
++                    control_count,
++                    pos,
++                } => {
++                    let Some(top) = self.open.len().checked_sub(1) else {
++                        continue;
++                    };
++                    let slot = self.last.get(&begin_id).copied().unwrap_or(top);
++                    let field = self.open[slot].take().expect("index of an open field");
++                    if let Some(older) = field.previous_same_id {
++                        self.last.insert(field.id, older);
++                    } else {
++                        self.last.remove(&field.id);
++                    }
++                    while self.open.last().is_some_and(Option::is_none) {
++                        self.open.pop();
++                    }
++                    if field.paragraph == serial {
++                        if let Some(i) = field.memo {
++                            ranges[i].end = Some(pos);
++                            ranges[i].inner_slot_count =
++                                control_count.saturating_sub(ranges[i].control_idx + 1);
++                        }
++                    }
++                }
++            }
++        }
++        ranges
++    }
++}
++
++struct Anchors {
 +    chars: Vec<char>,
 +    excerpt: String,
-+    ranges: Vec<Option<&'a crate::model::paragraph::FieldRange>>,
++    ranges: Vec<Option<MemoRange>>,
++    inline_before: Option<Vec<usize>>,
 +    positions: Option<Vec<usize>>,
 +}
-+impl<'a> Anchors<'a> {
-+    fn new(p: &'a Paragraph) -> Self {
++impl Anchors {
++    fn new(p: &Paragraph, place: &str, memo_ranges: &[MemoRange]) -> Self {
 +        let chars: Vec<_> = p.text.chars().collect();
 +        let excerpt = chars.iter().take(EXCERPT_CHARS).collect();
 +        let mut ranges = vec![None; p.controls.len()];
-+        for r in &p.field_ranges {
-+            if let Some(slot) = ranges.get_mut(r.control_idx) {
-+                slot.get_or_insert(r);
++        if p.memo_field_marks.is_empty() {
++            for r in &p.field_ranges {
++                if let Some(slot) = ranges.get_mut(r.control_idx) {
++                    slot.get_or_insert(MemoRange {
++                        start: r.start_char_idx,
++                        end: Some(r.end_char_idx),
++                        control_idx: r.control_idx,
++                        inner_slot_count: r.inner_slot_count,
++                    });
++                }
++            }
++        } else {
++            for r in memo_ranges {
++                if let Some(slot) = ranges.get_mut(r.control_idx) {
++                    *slot = Some(*r);
++                }
 +            }
 +        }
 +        Self {
 +            chars,
 +            excerpt,
 +            ranges,
++            inline_before: memo_inline_prefix(p, place),
 +            positions: None,
 +        }
 +    }
++}
++
++// The paragraph renderer advances its sub-run index for entries in the composer's
++// tac_controls, including forms. Note markers are separate render nodes. The
++// dedicated body-table path and multiple text runs need not share a single shift.
++fn memo_inline_prefix(p: &Paragraph, place: &str) -> Option<Vec<usize>> {
++    if p.controls
++        .iter()
++        .any(|c| matches!(c, Control::CharOverlap(_) | Control::Unknown(_)))
++    {
++        return None;
++    }
++    let is_tac = |c: &Control| {
++        c.is_treat_as_char_object() || matches!(c,Control::Form(f) if f.common.treat_as_char)
++    };
++    if !p.controls.iter().any(is_tac) {
++        return Some(Vec::new());
++    }
++    if p.text.contains('\u{fffc}') {
++        return None;
++    }
++    let composed = crate::renderer::composer::compose_paragraph(p);
++    let mut emitted = vec![false; p.controls.len()];
++    for &(_, _, ci) in &composed.tac_controls {
++        emitted[ci] = true;
++    }
++    // Body tables without other inline shapes use layout_inline_table_paragraph:
++    // its text runs keep the source character axis. For a block table the page
++    // fragment can select a different path. Cells use the general paragraph renderer.
++    if place == "body"
++        && p.controls
++            .iter()
++            .any(|c| matches!(c,Control::Table(t) if t.common.treat_as_char))
++        && !p.controls.iter().any(|c| {
++            matches!(c, Control::Equation(_))
++                || matches!(c, Control::Shape(_) | Control::Picture(_)) && is_tac(c)
++        })
++    {
++        let dedicated_table_path = p
++            .controls
++            .iter()
++            .enumerate()
++            .all(|(ci, c)| !is_tac(c) || (matches!(c, Control::Table(_)) && emitted[ci]));
++        return dedicated_table_path.then(Vec::new);
++    }
++    let text_line = match composed.lines.as_slice() {
++        [line] => line,
++        [table_line, line]
++            if place == "tableCell"
++                && table_line.runs.is_empty()
++                && table_line.has_line_break
++                && table_line.char_start == line.char_start =>
++        {
++            // compose_paragraph inserts a synthetic empty line for a block-width TAC table.
++            // Cell layout advances char_offset by one for its break before painting the text.
++            let mut tables = p.controls.iter().enumerate().filter(|(ci, c)| {
++                !emitted[*ci] && matches!(c,Control::Table(t) if t.common.treat_as_char)
++            });
++            let (ci, _) = tables.next()?;
++            if tables.next().is_some()
++                || p.controls[..ci]
++                    .iter()
++                    .any(|c| matches!(c,Control::Field(f) if memo_number(f).is_some()))
++            {
++                return None;
++            }
++            emitted[ci] = true;
++            line
++        }
++        _ => return None,
++    };
++    if text_line.runs.iter().filter(|r| !r.text.is_empty()).count() != 1 {
++        return None;
++    }
++    let mut prefix = Vec::with_capacity(emitted.len());
++    let mut count = 0;
++    for (ci, ctrl) in p.controls.iter().enumerate() {
++        if is_tac(ctrl) != emitted[ci] {
++            return None;
++        }
++        prefix.push(count);
++        count += usize::from(emitted[ci]);
++    }
++    Some(prefix)
 +}
 +
 +// The innermost cell or text box can be located only under an addressable owner.
@@ -318,6 +515,7 @@ index 00000000..5c2b0293
 +        if paragraphs.is_empty() || depth > MEMO_MAX_DEPTH {
 +            return;
 +        }
++        let mut fields = FieldScope::default();
 +        for (pi, p) in paragraphs.iter().enumerate() {
 +            if let Some((control_index, cell_index)) = cell {
 +                self.path.push(CellPath {
@@ -326,7 +524,7 @@ index 00000000..5c2b0293
 +                    cell_para_index: pi,
 +                });
 +            }
-+            self.paragraph(p, pi, place, depth, markable);
++            self.paragraph(p, pi, place, depth, markable, &mut fields);
 +            if cell.is_some() {
 +                self.path.pop();
 +            }
@@ -369,9 +567,11 @@ index 00000000..5c2b0293
 +        place: &'static str,
 +        depth: usize,
 +        markable: bool,
++        fields: &mut FieldScope,
 +    ) {
 +        self.paragraph_serial += 1;
 +        let serial = self.paragraph_serial;
++        let memo_ranges = fields.ranges(p, serial);
 +        let mut anchors = None;
 +        for (ci, ctrl) in p.controls.iter().enumerate() {
 +            match ctrl {
@@ -391,23 +591,23 @@ index 00000000..5c2b0293
 +                        self.output.skip();
 +                        continue;
 +                    };
-+                    let a = anchors.get_or_insert_with(|| Anchors::new(p));
++                    let a = anchors.get_or_insert_with(|| Anchors::new(p, place, &memo_ranges));
 +                    let range = a.ranges[ci];
-+                    let start = range.map(|r| r.start_char_idx).unwrap_or_else(|| {
++                    let start = range.map(|r| r.start).unwrap_or_else(|| {
 +                        a.positions
 +                            .get_or_insert_with(|| p.control_text_positions())
 +                            .get(ci)
 +                            .copied()
 +                            .unwrap_or_default()
 +                    });
-+                    let end = range.map(|r| r.end_char_idx);
++                    let end = range.and_then(|r| r.end);
 +                    let key = match range {
 +                        Some(r) if end == Some(start) => format!(
 +                            "{serial}/{start}/{start}/{}",
 +                            ci.saturating_add(r.inner_slot_count)
 +                        ),
-+                        Some(r) => format!("{serial}/{start}/{}", r.end_char_idx),
-+                        None => format!("{serial}/open/{ci}"),
++                        Some(MemoRange { end: Some(end), .. }) => format!("{serial}/{start}/{end}"),
++                        _ => format!("{serial}/open/{ci}"),
 +                    };
 +                    let from = start.min(a.chars.len());
 +                    let to = end
@@ -443,6 +643,10 @@ index 00000000..5c2b0293
 +                        owner_para_index: self.owner,
 +                        para_index: markable.then_some(pi),
 +                        path: markable.then_some(&self.path),
++                        inline_before: a
++                            .inline_before
++                            .as_ref()
++                            .map(|counts| counts.get(ci).copied().unwrap_or(0)),
 +                        start_char_idx: markable.then_some(start),
 +                        end_char_idx: end.filter(|_| markable),
 +                    };
@@ -500,6 +704,7 @@ index 00000000..5c2b0293
 +            path: vec![],
 +            paragraph_serial: 0,
 +        };
++        let mut body_fields = FieldScope::default();
 +        for (si, s) in self.document.sections.iter().enumerate() {
 +            reader.section = si;
 +            reader.output.problems.bad_records += s.memo_problems.bad_records;
@@ -509,7 +714,7 @@ index 00000000..5c2b0293
 +            reader.found = 0;
 +            for (pi, p) in s.paragraphs.iter().enumerate() {
 +                reader.owner = Some(pi);
-+                reader.paragraph(p, pi, "body", 0, true);
++                reader.paragraph(p, pi, "body", 0, true, &mut body_fields);
 +            }
 +            reader.owner = None;
 +            for mp in &s.section_def.master_pages {
@@ -1024,6 +1229,169 @@ index 00000000..5c2b0293
 +            }
 +        }
 +    }
++    fn hwpx_memo_section(parts: &str) -> Section {
++        crate::parser::hwpx::section::parse_hwpx_section(&format!(
++            "<hs:sec><hp:p><hp:run>{parts}</hp:run></hp:p></hs:sec>"
++        ))
++        .unwrap()
++    }
++    fn begin(id: u32) -> String {
++        format!(r#"<hp:ctrl><hp:fieldBegin id="{id}" type="MEMO"/></hp:ctrl>"#)
++    }
++    fn end(id: u32) -> String {
++        format!(r#"<hp:ctrl><hp:fieldEnd beginIDRef="{id}"/></hp:ctrl>"#)
++    }
++    #[test]
++    fn integration_crossing_memo_ranges_use_reference_without_changing_field_ranges() {
++        let s = hwpx_memo_section(&format!(
++            "{}<hp:t>😀</hp:t>{}<hp:t>나</hp:t>{}<hp:t>다</hp:t>{}",
++            begin(1),
++            begin(2),
++            end(1),
++            end(2)
++        ));
++        let legacy: Vec<_> = s.paragraphs[0]
++            .field_ranges
++            .iter()
++            .map(|r| (r.control_idx, r.start_char_idx, r.end_char_idx))
++            .collect();
++        assert_eq!(legacy, [(1, 1, 2), (0, 0, 3)]);
++        let r = read(s);
++        assert_eq!(r["memos"][0]["anchorText"], "😀나");
++        assert_eq!(r["memos"][1]["anchorText"], "나다");
++        for id in [0, 99] {
++            let r = read(hwpx_memo_section(&format!(
++                "{}{}<hp:t>A</hp:t>{}<hp:t>B</hp:t>{}",
++                begin(1),
++                begin(2),
++                end(id),
++                end(1)
++            )));
++            assert_eq!(r["memos"][1]["anchorText"], "A");
++        }
++    }
++    #[test]
++    fn integration_markpen_and_slotless_control_preserve_open_memo_start() {
++        let hidden = "<hp:ctrl><hp:hiddenComment><hp:subList/></hp:hiddenComment></hp:ctrl>";
++        let pen = r##"<hp:t><hp:markpenBegin color="#FF00FF"/>가<hp:markpenEnd/></hp:t>"##;
++        let xml = format!(
++            "{pen}{hidden}{}<hp:t>😀</hp:t>{}{}{}<hp:t>끝</hp:t>{pen}",
++            begin(1),
++            begin(2),
++            pen,
++            end(1)
++        );
++        let r = read(hwpx_memo_section(&xml));
++        assert_eq!(r["memos"][0]["anchorText"], "😀가");
++        assert_eq!(r["memos"][1]["anchorText"], "가끝가");
++        assert_eq!(r["memos"][1]["multiParagraph"], true);
++        assert_eq!(r["memos"][1]["startCharIdx"], 2);
++    }
++    #[test]
++    fn integration_inline_object_before_matches_emitted_run_coordinates() {
++        let frame = r#"<hp:sz width="700" height="400"/><hp:pos treatAsChar="1"/>"#;
++        for (tag, extra) in [
++            ("rect", ""),
++            ("ellipse", ""),
++            ("container", ""),
++            ("equation", "<hp:script>a+b</hp:script>"),
++            ("line", ""),
++            ("pic", ""),
++            ("btn", ""),
++        ] {
++            let obj = format!("<hp:{tag}>{frame}{extra}</hp:{tag}>");
++            let section = hwpx_memo_section(&format!(
++                "{obj}<hp:t>가</hp:t>{}<hp:t>나다</hp:t>{}{obj}",
++                begin(1),
++                end(1)
++            ));
++            let mut core =
++                DocumentCore::from_bytes(include_bytes!("../../../saved/blank2010.hwp")).unwrap();
++            let mut doc = core.document.clone();
++            doc.sections[0].paragraphs = section.paragraphs;
++            core.set_document(doc);
++            let r: Value = serde_json::from_str(&core.get_memos_json()).unwrap();
++            let memo = &r["memos"][0];
++            assert_eq!(memo["inlineBefore"], 1);
++            assert_eq!(memo["startCharIdx"], 1);
++            let layout: Value =
++                serde_json::from_str(&core.get_page_text_layout_native(0).unwrap()).unwrap();
++            let run = layout["runs"]
++                .as_array()
++                .unwrap()
++                .iter()
++                .find(|r| r["text"].as_str().is_some_and(|s| s.contains('나')))
++                .unwrap();
++            let needle = run["text"]
++                .as_str()
++                .unwrap()
++                .chars()
++                .position(|c| c == '나')
++                .unwrap() as u64;
++            assert_eq!(run["charStart"].as_u64().unwrap() + needle, 2, "{tag}");
++            let caret: Value =
++                serde_json::from_str(&core.get_cursor_rect_native(0, 0, 2).unwrap()).unwrap();
++            let x = run["x"].as_f64().unwrap() + run["charX"][needle as usize].as_f64().unwrap();
++            assert!(
++                (caret["x"].as_f64().unwrap() - x).abs() < 0.6,
++                "{tag} caret {caret}, text x {x}"
++            );
++        }
++    }
++    #[test]
++    fn integration_close_previous_paragraph_by_id_preserves_current_memo() {
++        let parts = format!(
++            "{}<hp:t>첫째</hp:t></hp:run></hp:p><hp:p><hp:run>{}<hp:t>가</hp:t>{}<hp:t>나</hp:t>{}",
++            begin(1),
++            begin(2),
++            end(1),
++            end(2)
++        );
++        let report = read(hwpx_memo_section(&parts));
++        assert_eq!(report["memos"][1]["anchorText"], "가나");
++        assert_eq!(report["memos"][0]["multiParagraph"], true);
++    }
++    #[test]
++    fn integration_nested_table_before_memo_matches_cell_layout() {
++        fn table(content: &str) -> String {
++            format!(
++                r#"<hp:tbl rowCnt="1" colCnt="1" pageBreak="CELL"><hp:sz width="20000" height="1500"/><hp:pos treatAsChar="1"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run>{content}</hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="20000" height="1500"/></hp:tc></hp:tr></hp:tbl>"#
++            )
++        }
++        let inner = table("<hp:t>칸</hp:t>");
++        let outer = table(&format!(
++            "{inner}<hp:t>하</hp:t>{}<hp:t>나</hp:t>{}<hp:t>하</hp:t>",
++            begin(1),
++            end(1)
++        ));
++        let mut core =
++            DocumentCore::from_bytes(include_bytes!("../../../saved/blank2010.hwp")).unwrap();
++        let mut doc = core.document.clone();
++        doc.sections[0].paragraphs = hwpx_memo_section(&outer).paragraphs;
++        core.set_document(doc);
++        let report: Value = serde_json::from_str(&core.get_memos_json()).unwrap();
++        let memo = &report["memos"][0];
++        let layout: Value =
++            serde_json::from_str(&core.get_page_text_layout_native(0).unwrap()).unwrap();
++        let run = layout["runs"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .find(|r| r["text"].as_str().is_some_and(|t| t.contains('나')))
++            .unwrap();
++        assert_eq!(memo["startCharIdx"], 1);
++        assert_eq!(memo["inlineBefore"], 1, "{run}");
++        assert_eq!(
++            run["charStart"].as_u64().unwrap()
++                + run["text"]
++                    .as_str()
++                    .unwrap()
++                    .chars()
++                    .position(|c| c == '나')
++                    .unwrap() as u64,
++            2
++        );
++    }
 +}
 diff --git a/src/document_core/queries/mod.rs b/src/document_core/queries/mod.rs
 index 3a1f8c12..f2d7dd35 100644
@@ -1120,6 +1488,48 @@ index a83677f7..a9d02210 100644
      /// 구역 정의
      pub section_def: SectionDef,
      /// 문단 리스트
+diff --git a/src/model/paragraph.rs b/src/model/paragraph.rs
+index 601e696c..96c9108f 100644
+--- a/src/model/paragraph.rs
++++ b/src/model/paragraph.rs
+@@ -91,6 +91,9 @@ pub struct Paragraph {
+     pub range_tags: Vec<RangeTag>,
+     /// 필드 텍스트 범위 (0x03~0x04 사이 텍스트 인덱스 + 컨트롤 인덱스)
+     pub field_ranges: Vec<FieldRange>,
++    /// HWPX field markers in source-visible coordinates for the memo reader. Rendering and serialization use field_ranges.
++    #[serde(skip)]
++    pub memo_field_marks: Vec<MemoFieldMark>,
+     /// 고아 FIELD_END (다단락 필드의 종료 마커 — begin 이 다른 문단). HWPX 전용 (Task #1556).
+     pub orphan_field_ends: Vec<OrphanFieldEnd>,
+     /// 컨트롤 목록 (표, 그림, 각주 등)
+@@ -579,6 +582,19 @@ pub struct TitleMark {
+     pub ignore: bool,
+ }
+ 
++#[derive(Debug, Clone, Copy)]
++pub enum MemoFieldMark {
++    Begin {
++        control_idx: usize,
++        pos: usize,
++    },
++    End {
++        begin_id: u32,
++        control_count: usize,
++        pos: usize,
++    },
++}
++
+ /// 필드 텍스트 범위 (0x03 FIELD_BEGIN ~ 0x04 FIELD_END 사이 텍스트)
+ #[derive(Debug, Clone, Default, serde::Serialize)]
+ pub struct FieldRange {
+@@ -1771,6 +1787,7 @@ impl Paragraph {
+             // 새로 계산된 줄은 `char_offsets` 와 같은 HWP5 축에서 나오므로 보정이 없다 (#5961).
+             hwpx_axis_shift: 0,
+             range_tags: new_range_tags,
++            memo_field_marks: Vec::new(),
+             field_ranges: new_field_ranges, // 새 문단으로 이관된 필드 범위
+             orphan_field_ends: Vec::new(),
+             char_count: new_char_count,
 diff --git a/src/model/raw_provenance.rs b/src/model/raw_provenance.rs
 index 80a2ee41..ae9d649e 100644
 --- a/src/model/raw_provenance.rs
@@ -1926,6 +2336,131 @@ index 70455077..3be8ca0c 100644
      #[test]
      fn test_parse_hwpx_invalid_data() {
          let result = parse_hwpx(&[0u8; 10]);
+diff --git a/src/parser/hwpx/section.rs b/src/parser/hwpx/section.rs
+index 8b490f6b..70e6b4b9 100644
+--- a/src/parser/hwpx/section.rs
++++ b/src/parser/hwpx/section.rs
+@@ -23,7 +23,7 @@ use crate::model::page::{
+     PageBorderUiBasis, PageDef,
+ };
+ use crate::model::paragraph::{
+-    CharShapeRef, FieldRange, LineSeg, OrphanFieldEnd, Paragraph, TitleMark,
++    CharShapeRef, FieldRange, LineSeg, MemoFieldMark, OrphanFieldEnd, Paragraph, TitleMark,
+ };
+ use crate::model::shape::{
+     ArcShape, CommonObjAttr, ConnectorControlPoint, ConnectorData, CurveShape, DrawingObjAttr,
+@@ -684,7 +684,7 @@ fn parse_paragraph_body(
+     let mut sec_pr_run_has_col_pr = false;
+     // [Task #1556] fieldEnd 의 (beginIDRef, fieldid) 를 출현 순서대로 보관 — text_parts 의
+     // `\u{0004}` 와 1:1 대응. 고아 fieldEnd 복원에 사용.
+-    let mut field_end_attrs: Vec<(u32, u32)> = Vec::new();
++    let mut field_end_attrs: Vec<(u32, u32, usize)> = Vec::new();
+ 
+     // Empty elements share attributes/finalization but must not consume a sibling.
+     loop {
+@@ -965,10 +965,10 @@ fn parse_paragraph_body(
+                 control_idx += 1;
+             }
+             "\u{0004}" => {
+-                let (begin_id_ref, field_id) = field_end_attrs
++                let (begin_id_ref, field_id, _) = field_end_attrs
+                     .get(field_end_idx)
+                     .copied()
+-                    .unwrap_or((0, 0));
++                    .unwrap_or((0, 0, 0));
+                 field_end_idx += 1;
+                 if let Some((start_char_idx, begin_control_idx)) = field_stack.pop() {
+                     // 필드 안쪽 컨트롤 슬롯 수 — 표·그림을 감싼 누름틀이 텍스트 축에서
+@@ -1011,6 +1011,9 @@ fn parse_paragraph_body(
+             }
+         }
+     }
++    if !field_end_attrs.is_empty() || para.controls.iter().any(|c| matches!(c, Control::Field(_))) {
++        para.memo_field_marks = memo_field_marks(&text_parts, &para.controls, &field_end_attrs);
++    }
+     para.field_ranges = field_ranges;
+     para.orphan_field_ends = orphan_field_ends;
+ 
+@@ -5072,7 +5075,7 @@ fn parse_ctrl(
+     reader: &mut Reader<&[u8]>,
+     controls: &mut Vec<Control>,
+     text_parts: &mut Vec<String>,
+-    field_end_attrs: &mut Vec<(u32, u32)>,
++    field_end_attrs: &mut Vec<(u32, u32, usize)>,
+ ) -> Result<(), HwpxError> {
+     let mut buf = Vec::new();
+     loop {
+@@ -5138,7 +5141,8 @@ fn parse_ctrl(
+                     }
+                     b"fieldEnd" => {
+                         // [Task #1556] beginIDRef/fieldid 포착 (고아 fieldEnd 복원용).
+-                        field_end_attrs.push(parse_field_end_attrs(ce));
++                        let (id, field_id) = parse_field_end_attrs(ce);
++                        field_end_attrs.push((id, field_id, controls.len()));
+                         skip_element(reader, b"fieldEnd")?;
+                         // FIELD_END 제어 문자 추가 (Task #11)
+                         text_parts.push("\u{0004}".to_string());
+@@ -5238,7 +5242,8 @@ fn parse_ctrl(
+                     }
+                     b"fieldEnd" => {
+                         // [Task #1556] 자기닫힘 fieldEnd — beginIDRef/fieldid 포착.
+-                        field_end_attrs.push(parse_field_end_attrs(ce));
++                        let (id, field_id) = parse_field_end_attrs(ce);
++                        field_end_attrs.push((id, field_id, controls.len()));
+                         text_parts.push("\u{0004}".to_string());
+                     }
+                     b"hiddenComment" => {}
+@@ -5861,6 +5866,50 @@ fn hwpx_map_std_pos_to_5251_axis(parts: &[String], std_pos: u32) -> u32 {
+     mapped
+ }
+ 
++/// Read the memo projection independently of the legacy field ranges used for layout
++/// and saving. Begin markers correspond only to Field controls, including when some
++/// other XML controls have no text part. Ends carry the actual control count at the
++/// marker, so zero-width ranges enclosing distinct objects retain distinct keys.
++fn memo_field_marks(
++    parts: &[String],
++    controls: &[Control],
++    ends: &[(u32, u32, usize)],
++) -> Vec<MemoFieldMark> {
++    let mut fields = controls
++        .iter()
++        .enumerate()
++        .filter_map(|(i, c)| matches!(c, Control::Field(_)).then_some(i));
++    let mut ends = ends.iter();
++    let mut marks = Vec::new();
++    let mut pos = 0;
++    for part in parts {
++        match part.as_str() {
++            "\u{0003}" => {
++                if let Some(control_idx) = fields.next() {
++                    marks.push(MemoFieldMark::Begin { control_idx, pos });
++                }
++            }
++            "\u{0004}" => {
++                if let Some(&(begin_id, _, control_count)) = ends.next() {
++                    marks.push(MemoFieldMark::End {
++                        begin_id,
++                        control_count,
++                        pos,
++                    });
++                }
++            }
++            "\u{0002}"
++            | PAGE_FOOTER_SLOT_PART
++            | TITLE_MARK_PART_IGNORE
++            | TITLE_MARK_PART_KEEP
++            | MARKPEN_END_PART => {}
++            p if p.starts_with(MARKPEN_BEGIN_PART_PREFIX) => {}
++            p => pos += p.chars().count(),
++        }
++    }
++    marks
++}
++
+ /// [#3518] HWP3 는 개체를 U+FFFC 1유닛으로 남긴다. HWPX 슬롯 `\u{0002}`(8유닛)를
+ /// 그 위에 또 쌓으면 char_count 가 부풀어(sample16 문단 394: 6→30) TAC 표가
+ /// 블록 표로 빠지며 쪽이 +1 된다. 아직 짝이 없는 FFFC 가 있으면 8유닛을 넣지 않는다.
 diff --git a/src/parser/mod.rs b/src/parser/mod.rs
 index e4467db3..464caa4a 100644
 --- a/src/parser/mod.rs

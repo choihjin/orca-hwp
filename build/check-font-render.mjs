@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Resvg, initWasm } from '../agent/vendor/resvg/index.mjs'
-import { decodeWoff2 } from '../agent/vendor/woff2/decode.mjs'
+import { decodeWoff2 } from '../agent/woff2.js'
 
 const fontDir = new URL('../editor/fonts/', import.meta.url)
 const fonts = JSON.parse(readFileSync(new URL('manifest.json', fontDir), 'utf8'))

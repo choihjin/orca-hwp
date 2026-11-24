@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { hasRequestedFamily, matchFontFace } from './sfnt.js'
 import { decodeWoff1 } from './woff1.js'
+import { decodeWoff2 } from './woff2.js'
 
 const fontsDir = new URL('../editor/fonts/', import.meta.url)
-const decoderUrl = new URL('./vendor/woff2/decode.mjs', import.meta.url)
 const fallbackFamilies = new Set(['noto serif kr', 'noto sans kr'])
 const familyAliases = new Map([
   ['nanum myeongjo', 'NanumMyeongjo'],
@@ -13,7 +13,6 @@ const familyAliases = new Map([
   ['source han serif k old hangul', 'RHWP Old Hangul']
 ])
 const xmlEntities = { apos: "'", quot: '"', amp: '&', lt: '<', gt: '>' }
-const woff2Decoder = existsSync(decoderUrl) ? () => import(decoderUrl.href) : null
 
 /**
  * resvg uses font files' internal family names. Keep the requested family first
@@ -95,10 +94,8 @@ function loadLocalFonts(dir, fontBuffers, warnings, requested) {
 async function decodeFont(bytes) {
   const format = bytes.toString('ascii', 0, 4)
   if (format === 'wOFF') return decodeWoff1(bytes)
-  if (format !== 'wOF2') return bytes
-  if (!woff2Decoder) throw new Error('WOFF2 decoder is missing')
-  const { decodeWoff2 } = await woff2Decoder()
-  return decodeWoff2(bytes)
+  if (format === 'wOF2') return decodeWoff2(bytes)
+  return bytes
 }
 
 /** @param {string} face @param {string[]} warnings */

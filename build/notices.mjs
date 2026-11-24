@@ -111,21 +111,6 @@ sections.push(section(
   resvgText
 ))
 
-const decoderText = await reviewed('woff2-encoder-MIT.txt', await fromPlugin('agent/vendor/woff2/LICENSE'))
-sections.push(section(
-  `woff2-encoder@${pins.woff2.version} (MIT)`,
-  `https://github.com/itskyedo/woff2-encoder/tree/${pins.woff2.upstreamCommit}\n${pins.woff2.tarball.url}`,
-  decoderText
-))
-for (const [file, name, review] of [
-  ['LICENSE-WOFF2', 'Google WOFF2 (MIT)', 'google-woff2-MIT.txt'],
-  ['LICENSE-Brotli', 'Google Brotli (MIT)', 'google-brotli-MIT.txt'],
-  ['LICENSE-Emscripten', 'Emscripten (MIT OR NCSA)', 'emscripten-MIT-NCSA.txt'],
-]) {
-  const text = await reviewed(review, await fromPlugin(`agent/vendor/woff2/${file}`))
-  sections.push(section(name, pins.woff2.licenses[file].url, text))
-}
-
 const notices = sections.join(separator) + '\n'
 await writeFile(new URL('THIRD_PARTY_NOTICES.txt', root), notices)
 console.log(`THIRD_PARTY_NOTICES.txt: ${inventory.crates.length} Cargo packages including rhwp, ${Buffer.byteLength(notices)} B`)

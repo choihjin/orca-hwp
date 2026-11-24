@@ -45,9 +45,17 @@ const unlinked = (over = {}) =>
     ...over
   })
 
+/**
+ * @param {unknown[]} memos
+ * @param {unknown[]} [problems]
+ */
 const build = (memos, problems = []) => buildMemoReport(JSON.stringify({ memos, problems }))
 
-/** Runs `fn` with the process time zone set to `zone`, restoring it afterwards. */
+/**
+ * Runs `fn` with the process time zone set to `zone`, restoring it afterwards.
+ * @param {string} zone
+ * @param {() => void} fn
+ */
 function inZone(zone, fn) {
   const before = process.env.TZ
   process.env.TZ = zone
@@ -160,15 +168,15 @@ test('problems are passed on, also when there is no memo', () => {
 
 test('JSON of another shape is an error, never an empty list', () => {
   for (const json of ['{}', '[]', '"x"', 'null', '', 'not json', '{"memos":[]}', '{"memos":{},"problems":[]}']) {
-    assert.throws(() => buildMemoReport(json), Error, json)
+    assert.throws(() => buildMemoReport(json), (error) => error instanceof Error)
   }
   const { author, ...noAuthor } = entry()
   assert.equal(author, '검토자 가')
   for (const bad of [null, 'x', {}, noAuthor, entry({ number: '1' }), entry({ place: 'margin' }), entry({ text: 3 }),
     entry({ anchorKey: undefined }), entry({ path: [{ controlIndex: 0 }] }), entry({ startCharIdx: '8' })]) {
-    assert.throws(() => build([bad]), Error, JSON.stringify(bad))
+    assert.throws(() => build([bad]), (error) => error instanceof Error)
   }
-  for (const bad of [null, 'bad-record', {}]) assert.throws(() => build([], [bad]), Error, JSON.stringify(bad))
+  for (const bad of [null, 'bad-record', {}]) assert.throws(() => build([], [bad]), (error) => error instanceof Error)
 })
 
 test('shortDate drops the year of the current year and uses local time', () => {
@@ -221,7 +229,9 @@ test('placeLabel names every place', () => {
     masterPage: '바탕쪽',
     unlinked: '글과 연결되지 않음'
   }
-  for (const [place, label] of Object.entries(expected)) assert.equal(placeLabel(place), label)
+  for (const [place, label] of Object.entries(expected)) {
+    assert.equal(placeLabel(/** @type {keyof typeof expected} */ (place)), label)
+  }
 })
 
 test('problemText says in one line what could not be read', () => {
@@ -231,6 +241,6 @@ test('problemText says in one line what could not be read', () => {
   assert.match(problemText({ code: 'section-unreadable', sectionIndex: 0 }), /1구역/)
   assert.match(problemText({ code: 'future-code' }), /메모/)
   for (const problem of [{ code: 'no-body', number: 7 }, { code: 'bad-record' }, { code: 'future-code' }]) {
-    assert.doesNotMatch(problemText(problem), /\n|undefined/)
+    assert.equal(/\n|undefined/.test(problemText(problem)), false)
   }
 })

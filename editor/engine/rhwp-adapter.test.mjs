@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
+import { HwpDocument } from '../vendor/rhwp/rhwp.js' // only to stand in for engine methods below
 import { ENGINE_INFO, EngineError, initEngine, openDocument } from './rhwp-adapter.js'
 
 const wasmBytes = new Uint8Array(readFileSync(new URL('../vendor/rhwp/rhwp_bg.wasm', import.meta.url)))
@@ -142,5 +143,195 @@ test('a truncated HWPX sample is corrupt', async () => {
   }
   const doc = openDocument(full)
   assert.equal(doc.pageCount, 30)
+  doc.dispose()
+})
+
+/**
+ * Runs `fn` with engine methods replaced, so memo reading is tested apart from the engine build.
+ * @param {Record<string, unknown>} methods
+ * @param {() => void} fn
+ */
+function withEngine(methods, fn) {
+  const before = Object.getOwnPropertyDescriptors(HwpDocument.prototype)
+  for (const [name, value] of Object.entries(methods)) {
+    Object.defineProperty(HwpDocument.prototype, name, { value, configurable: true, writable: true })
+  }
+  try {
+    fn()
+  } finally {
+    for (const name of Object.keys(methods)) {
+      if (before[name]) Object.defineProperty(HwpDocument.prototype, name, before[name])
+      else Reflect.deleteProperty(HwpDocument.prototype, name)
+    }
+  }
+}
+
+const memoEntry = {
+  number: 1,
+  author: '검토자 가',
+  text: '본문',
+  date: null,
+  dateText: null,
+  place: 'body',
+  anchorText: '보건정책과',
+  paragraphText: '보건정책과',
+  multiParagraph: false,
+  anchorKey: 'a',
+  sectionIndex: 0,
+  ownerParaIndex: 2,
+  paraIndex: 2,
+  path: null,
+  startCharIdx: 1,
+  endCharIdx: 3
+}
+
+const planUrl = new URL('../../fixtures/2022년 국립국어원 업무계획.hwp', import.meta.url)
+
+async function openSample(url = sampleUrl) {
+  await initEngine(wasmBytes)
+  return openDocument(new Uint8Array(readFileSync(url)))
+}
+
+test('a document without memos gives an empty report', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  // an engine built before 0.8.7-p2 has no getMemos: stand in for it, use the real one otherwise
+  const missing = !('getMemos' in HwpDocument.prototype)
+  withEngine(missing ? { getMemos: () => '{"memos":[],"problems":[]}' } : {}, () => {
+    assert.deepEqual(doc.memos(), { threads: [], problems: [] })
+  })
+  doc.dispose()
+})
+
+test('memos are read from the engine once and kept', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  let calls = 0
+  const getMemos = () => {
+    calls++
+    return JSON.stringify({ memos: [memoEntry], problems: [{ code: 'bad-record' }] })
+  }
+  withEngine({ getMemos }, () => {
+    const report = doc.memos()
+    assert.equal(report.threads[0].memos[0].text, '본문')
+    assert.deepEqual(report.problems, [{ code: 'bad-record' }])
+    assert.equal(doc.memos(), report)
+    assert.equal(calls, 1)
+  })
+  doc.dispose()
+})
+
+test('an engine that cannot give memos is an engine error, not a document without memos', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  const broken = [
+    undefined,
+    () => '{"memos":',
+    () => '{}',
+    () => {
+      throw '렌더링 오류: 메모'
+    }
+  ]
+  for (const getMemos of broken) {
+    withEngine({ getMemos }, () => assert.equal(codeOf(() => doc.memos()), 'engine'))
+  }
+  // a failure is not kept as the answer
+  withEngine({ getMemos: () => '{"memos":[],"problems":[]}' }, () => assert.equal(doc.memos().threads.length, 0))
+  doc.dispose()
+})
+
+test('pageAnchorRuns gives every run its place, and only runs that have one', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  const runs = doc.pageAnchorRuns(0)
+  assert.equal(runs[0].charX.length, Array.from(runs[0].text).length + 1)
+  assert.equal(typeof runs[0].paraIdx, 'number')
+  const inCell = runs.find((run) => run.cellPath)
+  assert.equal(typeof inCell?.parentParaIdx, 'number')
+  assert.deepEqual(Object.keys(inCell?.cellPath?.[0] ?? {}).sort(), ['cellIndex', 'cellParaIndex', 'controlIndex'])
+  // the keys agents already get stay as they are
+  assert.deepEqual(Object.keys(doc.pageTextRuns(0)[0]).sort(), ['bold', 'fontFamily', 'fontSize', 'h', 'text', 'w', 'x', 'y'])
+  // page numbers and list marks have no place in the document text
+  const layout = { runs: [{ text: '- 1 -', x: 0, y: 0, w: 1, h: 1, charX: [0, 1, 2, 3, 4, 5] }, { text: 'a', x: 1, y: 2, w: 3, h: 4, charX: [0, 3], secIdx: 0, paraIdx: 5, charStart: 6, bold: true }] }
+  withEngine({ getPageTextLayout: () => JSON.stringify(layout) }, () => {
+    assert.deepEqual(doc.pageAnchorRuns(0), [{ text: 'a', x: 1, y: 2, w: 3, h: 4, charX: [0, 3], secIdx: 0, paraIdx: 5, charStart: 6 }])
+  })
+  doc.dispose()
+})
+
+/** @param {Record<string, unknown>} over */
+function threadAt(over = {}) {
+  const { anchor, ...rest } = /** @type {any} */ (over)
+  return /** @type {any} */ ({
+    place: 'body',
+    anchor: { sectionIndex: 0, ownerParaIndex: 2, paraIndex: 2, path: null, startCharIdx: 1, endCharIdx: 3, ...anchor },
+    ...rest
+  })
+}
+
+test('memoCandidatePage asks the caret for the memo position, by path inside cells', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  /** @type {unknown[][]} */
+  const asked = []
+  const answer = (/** @type {string} */ name) => (/** @type {unknown[]} */ ...args) => {
+    asked.push([name, ...args])
+    return '{"pageIndex":2,"x":1,"y":2,"height":3}'
+  }
+  withEngine({ getCursorRect: answer('rect'), getCursorRectByPath: answer('path') }, () => {
+    const path = [{ controlIndex: 0, cellIndex: 3, cellParaIndex: 1 }]
+    assert.equal(doc.memoCandidatePage(threadAt()), 2)
+    assert.equal(doc.memoCandidatePage(threadAt({ anchor: { path: [] } })), 2)
+    assert.equal(doc.memoCandidatePage(threadAt({ place: 'tableCell', anchor: { ownerParaIndex: 7, paraIndex: 1, path } })), 2)
+    // a note or caption has no position of its own: the paragraph that owns it counts
+    const outside = { paraIndex: null, path: null, startCharIdx: null, endCharIdx: null }
+    assert.equal(doc.memoCandidatePage(threadAt({ place: 'footnote', anchor: { ...outside, ownerParaIndex: 4 } })), 2)
+    assert.deepEqual(asked, [['rect', 0, 2, 1], ['rect', 0, 2, 1], ['path', 0, 7, JSON.stringify(path), 1], ['rect', 0, 4, 0]])
+    assert.equal(doc.memoCandidatePage({ ...threadAt(), place: 'unlinked', anchor: null }), null)
+  })
+  doc.dispose()
+})
+
+test('memoCandidatePage is null when the caret has no position', async () => {
+  if (!existsSync(sampleUrl)) return
+  const doc = await openSample()
+  for (const getCursorRect of [
+    () => {
+      throw '렌더링 오류: 문단 (sec=0, para=99)이 페이지에 없습니다'
+    },
+    () => '{}',
+    () => '{"pageIndex":4}', // the sample has 4 pages
+    () => '{"pageIndex":-1}',
+    () => 'x'
+  ]) {
+    withEngine({ getCursorRect }, () => assert.equal(doc.memoCandidatePage(threadAt()), null))
+  }
+  doc.dispose()
+})
+
+// 35 pages of body text and tables, none of them with a heading row repeated on later pages.
+test('memoCandidatePage follows text to the page it is drawn on; boundaries count code points', async () => {
+  if (!existsSync(planUrl)) return
+  const doc = await openSample(planUrl)
+  let seen = 0
+  let surrogates = 0
+  for (let page = 0; page < doc.pageCount; page++) {
+    for (const run of doc.pageAnchorRuns(page)) {
+      const length = Array.from(run.text).length
+      assert.equal(run.charX.length, length + 1)
+      if (length !== run.text.length) surrogates++
+      if (run.text === '' || run.paraIdx > 0xffff || seen++ % 7 !== 0) continue
+      const anchor = {
+        sectionIndex: run.secIdx,
+        ownerParaIndex: run.parentParaIdx ?? run.paraIdx,
+        paraIndex: run.paraIdx,
+        path: run.cellPath ?? null,
+        startCharIdx: run.charStart
+      }
+      assert.equal(doc.memoCandidatePage(threadAt({ anchor })), page, run.text)
+    }
+  }
+  assert.ok(seen > 4000)
+  assert.ok(surrogates > 0)
   doc.dispose()
 })

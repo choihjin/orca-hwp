@@ -4,6 +4,7 @@
 import init, { HwpDocument } from '../vendor/rhwp/rhwp.js'
 import { ENGINE_INFO } from '../vendor/rhwp/engine-info.js'
 import { detectKind } from '../format.js'
+import { buildMemoReport } from './memo-threads.js'
 
 export { ENGINE_INFO }
 
@@ -14,13 +15,23 @@ export { ENGINE_INFO }
  *   fontFamily: string, fontSize: number, bold: boolean }} TextRun
  */
 
+/** @typedef {import('./memo-marks.js').AnchorRun} AnchorRun */
+/** @typedef {import('./memo-threads.js').MemoReport} MemoReport */
+/** @typedef {import('./memo-threads.js').MemoThread} MemoThread */
+
 /**
  * Pages are numbered from 0; sizes are in the same px units as the SVG.
+ * `memos` throws an `EngineError` when the memos cannot be read; the document stays usable.
+ * `memoCandidatePage` is the page of the caret at the memo, null when the engine has none.
+ * `pageAnchorRuns` leaves out text that is not at a place in the document, such as page numbers.
  * @typedef {{
  *   pageCount: number,
  *   pageSize(i: number): { width: number, height: number },
  *   renderPageSvg(i: number): string,
  *   pageTextRuns(i: number): TextRun[],
+ *   memos(): MemoReport,
+ *   memoCandidatePage(thread: MemoThread): number | null,
+ *   pageAnchorRuns(i: number): AnchorRun[],
  *   dispose(): void
  * }} EngineDocument
  */
@@ -96,6 +107,33 @@ function hasZipEnd(bytes) {
 }
 
 /**
+ * @param {HwpDocument} doc
+ * @returns {MemoReport}
+ */
+function readMemos(doc) {
+  try {
+    const { getMemos } = /** @type {{ getMemos?: () => string }} */ (/** @type {unknown} */ (doc))
+    if (!getMemos) throw new Error('the engine has no getMemos')
+    return buildMemoReport(getMemos.call(doc))
+  } catch (error) {
+    throw new EngineError('engine', String(error instanceof Error ? error.message : error))
+  }
+}
+
+/**
+ * @param {HwpDocument} doc
+ * @param {MemoThread} thread
+ * @returns {string | null} the caret as JSON
+ */
+function memoCaret(doc, { anchor }) {
+  if (!anchor) return null
+  const { sectionIndex, ownerParaIndex, path, startCharIdx } = anchor
+  return path && path.length > 0
+    ? doc.getCursorRectByPath(sectionIndex, ownerParaIndex, JSON.stringify(path), startCharIdx ?? 0)
+    : doc.getCursorRect(sectionIndex, ownerParaIndex, startCharIdx ?? 0)
+}
+
+/**
  * @param {Uint8Array} bytes
  * @returns {EngineDocument}
  */
@@ -119,8 +157,11 @@ export function openDocument(bytes) {
     throw classified
   }
   let disposed = false
+  const pageCount = doc.pageCount()
+  /** @type {MemoReport | null} */
+  let memoReport = null
   return {
-    pageCount: doc.pageCount(),
+    pageCount,
     pageSize(i) {
       const info = JSON.parse(doc.getPageInfo(i))
       return { width: Number(info.width), height: Number(info.height) }
@@ -141,6 +182,44 @@ export function openDocument(bytes) {
         fontSize: Number(run.fontSize),
         bold: Boolean(run.bold)
       }))
+    },
+    memos() {
+      memoReport ??= readMemos(doc)
+      return memoReport
+    },
+    memoCandidatePage(thread) {
+      try {
+        const caret = memoCaret(doc, thread)
+        const page = caret === null ? null : JSON.parse(caret).pageIndex
+        return Number.isInteger(page) && page >= 0 && page < pageCount ? page : null
+      } catch {
+        return null // the engine has no caret for 1 to 2 % of positions
+      }
+    },
+    pageAnchorRuns(i) {
+      const layout = JSON.parse(doc.getPageTextLayout(i))
+      const runs = Array.isArray(layout.runs) ? layout.runs : []
+      return runs
+        .filter((/** @type {Record<string, unknown>} */ run) => run.charStart !== undefined && Array.isArray(run.charX))
+        .map((/** @type {Record<string, any>} */ run) => ({
+          text: String(run.text ?? ''),
+          x: Number(run.x),
+          y: Number(run.y),
+          w: Number(run.w),
+          h: Number(run.h),
+          charX: run.charX.map(Number),
+          secIdx: Number(run.secIdx),
+          paraIdx: Number(run.paraIdx),
+          charStart: Number(run.charStart),
+          ...(Array.isArray(run.cellPath) && {
+            parentParaIdx: Number(run.parentParaIdx),
+            cellPath: run.cellPath.map((/** @type {Record<string, unknown>} */ step) => ({
+              controlIndex: Number(step.controlIndex),
+              cellIndex: Number(step.cellIndex),
+              cellParaIndex: Number(step.cellParaIndex)
+            }))
+          })
+        }))
     },
     dispose() {
       if (!disposed) {

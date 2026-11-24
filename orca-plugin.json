@@ -2,14 +2,14 @@
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
   "id": "hwp-viewer",
-  "name": "HWP Viewer",
-  "version": "0.1.4",
+  "name": "HWP Reader",
+  "version": "0.1.5",
   "description": "Read-only viewer for Hangul word processor documents (.hwp and .hwpx) inside Orca, drawn page by page with the rhwp engine. An independent project, not affiliated with Hancom.",
   "repository": "https://github.com/choihjin/orca-hwp",
   "icon": "assets/icon.png",
   "cover": {
     "path": "assets/cover.png",
-    "alt": "The HWP Viewer icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook"
+    "alt": "The HWP Reader icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook"
   },
   "screenshots": [
     {
@@ -59,7 +59,7 @@
     "customEditors": [
       {
         "id": "hwp-viewer",
-        "title": "HWP Viewer",
+        "title": "HWP Reader",
         "extensions": [
           ".hwpx",
           ".hwp"

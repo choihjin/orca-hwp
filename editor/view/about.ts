@@ -28,7 +28,7 @@ export function setupAbout(panel: HTMLElement, button: HTMLElement, onClose: () 
   const body = document.createElement('div')
   body.className = 'about-body'
   const h = document.createElement('h2')
-  h.textContent = 'HWP Viewer 정보'
+  h.textContent = 'HWP Reader 정보'
   const closeButton = document.createElement('button')
   closeButton.type = 'button'
   closeButton.textContent = '닫기'

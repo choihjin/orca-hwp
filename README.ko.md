@@ -102,7 +102,7 @@ npm run check:size    # Orca 크기 상한 검사
 orca plugin dev watch .
 ```
 
-편집기는 빌드 단계 없이 동작합니다. 외부 파일(rhwp, 글꼴, PNG 변환기)은 `build/`의 스크립트가 받아 해시를 검증한 뒤 싣습니다(`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). 서드파티 고지는 `npm run notices`로 만듭니다. 엔진 WASM은 v0.8.7에 `build/rhwp-patches/`의 패치를 적용해 빌드한 것이며, `build/build-rhwp-patched.sh`로 다시 빌드해 고정 해시와 비교할 수 있습니다(Rust 툴체인 필요).
+편집기는 빌드 단계 없이 동작합니다. 외부 파일(rhwp, 글꼴, PNG 변환기)은 `build/`의 스크립트가 받아 해시를 검증한 뒤 싣습니다(`npm run vendor:rhwp`, `vendor:fonts`, `vendor:resvg`). 서드파티 고지는 `npm run notices`로 만듭니다. 엔진(WASM과 JS 연결 파일)은 v0.8.7에 `build/rhwp-patches/`의 패치 두 개를 적용해 빌드한 것이며, `build/build-rhwp-patched.sh`로 다시 빌드해 고정 해시와 비교할 수 있습니다(Rust 툴체인 필요).
 
 | 경로 | 내용 |
 |---|---|

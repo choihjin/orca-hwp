@@ -2824,7 +2824,7 @@ index 87e5107d..4a031bdf 100644
      doc.sections.push(section);
  
 diff --git a/src/parser/hwpx/content.rs b/src/parser/hwpx/content.rs
-index 6bdc00e9..8c03452b 100644
+index 6bdc00e9..c48e3a46 100644
 --- a/src/parser/hwpx/content.rs
 +++ b/src/parser/hwpx/content.rs
 @@ -27,6 +27,10 @@ pub struct PackageItem {
@@ -2832,13 +2832,13 @@ index 6bdc00e9..8c03452b 100644
      /// 섹션 XML 파일 경로 목록 (순서 보존)
      pub section_files: Vec<String>,
 +    /// Declared section paths in manifest order, independent of navigation.
-+    declared_section_files: Vec<String>,
++    pub(super) declared_section_files: Vec<String>,
 +    spine_section_count: usize,
 +    first_unresolved: Option<usize>,
      /// 섹션별 바탕쪽 XML 파일 경로 목록.
      ///
      /// HWPX manifest는 masterpage 항목을 section 항목 앞에 배치하는 형태가 관찰된다.
-@@ -41,6 +45,59 @@ pub struct PackageInfo {
+@@ -41,8 +45,79 @@ pub struct PackageInfo {
      pub bin_data_items: Vec<PackageItem>,
  }
  
@@ -2873,7 +2873,16 @@ index 6bdc00e9..8c03452b 100644
 +        Some((first, missing))
 +    }
 +}
-+fn section_item(id: &str, href: &str, media: &str, in_spine: bool) -> bool {
++// Some producers put auxiliary XML in the spine, even with "section" in the
++// name. Only a numbered section token or a dedicated media type identifies a
++// section without reading its root. Explicitly non-XML media remain attachments.
++fn section_item(
++    id: &str,
++    href: &str,
++    media: &str,
++    spine: Option<bool>,
++    probe: impl FnOnce() -> Option<bool>,
++) -> bool {
 +    if media == "application/section+xml"
 +        || media.ends_with(".section+xml")
 +        || media.ends_with("hwpml-section+xml")
@@ -2883,24 +2892,38 @@ index 6bdc00e9..8c03452b 100644
 +    if media != "application/xml" && media != "text/xml" {
 +        return false;
 +    }
++    let id = id.to_ascii_lowercase();
 +    let basename = href.rsplit('/').next().unwrap_or(href).to_ascii_lowercase();
 +    let stem = basename.strip_suffix(".xml").unwrap_or(&basename);
-+    if stem == "header" || stem == "settings" || stem.starts_with("masterpage") || id == "header" {
++    let tokens = || id.split(['-', '_']).chain(stem.split(['-', '_']));
++    if tokens().any(|t| {
++        t.strip_prefix("section")
++            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
++    }) {
++        return true;
++    }
++    if spine.is_none() && !tokens().any(|t| t == "section") {
 +        return false;
 +    }
-+    let section_token = |token: &str| {
-+        token
-+            .strip_prefix("section")
-+            .is_some_and(|s| s.bytes().all(|b| b.is_ascii_digit()))
-+    };
-+    in_spine || section_token(&id.to_ascii_lowercase()) || stem.split(['-', '_']).any(section_token)
++    probe().unwrap_or(spine == Some(true))
 +}
  /// content.hpf XML을 파싱하여 섹션/BinData 목록을 추출한다.
  pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
++    parse_content_hpf_with_roots(xml, |_| None)
++}
++pub(super) fn parse_content_hpf_with_roots(
++    xml: &str,
++    mut probe: impl FnMut(&str) -> Option<bool>,
++) -> Result<PackageInfo, HwpxError> {
      let mut reader = Reader::from_str(xml);
-@@ -52,13 +109,20 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+     let mut info = PackageInfo::default();
+     let mut buf = Vec::new();
+@@ -50,15 +125,22 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+     // 임시 저장: 모든 item을 수집 후 섹션은 spine 순서로 정렬
+     // [Task #873] is_embedded 추가 — isEmbeded="0" (외부 file 참조) 식별
      let mut all_items: Vec<(String, String, String, bool)> = Vec::new(); // (id, href, media_type, is_embedded)
-     let mut spine_order: Vec<String> = Vec::new(); // idref 순서
+-    let mut spine_order: Vec<String> = Vec::new(); // idref 순서
++    let mut spine_order: Vec<(String, bool)> = Vec::new(); // idref 순서
  
 +    let mut depth = 0usize;
 +    let mut manifest_depth = None;
@@ -2921,24 +2944,24 @@ index 6bdc00e9..8c03452b 100644
                          let mut id = String::new();
                          let mut href = String::new();
                          let mut media_type = String::new();
-@@ -80,43 +144,77 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+@@ -80,43 +162,94 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
                              all_items.push((id, href, media_type, is_embedded));
                          }
                      }
 -                    b"itemref" => {
--                        for attr in e.attributes().flatten() {
++                    b"itemref" if spine_depth == Some(depth) => {
++                        let mut id = String::new();
++                        let mut linear = true;
+                         for attr in e.attributes().flatten() {
 -                            if attr.key.as_ref().as_bytes() == b"idref" {
 -                                spine_order.push(attr_value(&attr));
--                            }
--                        }
-+                    b"itemref" if spine_depth == Some(depth) => {
-+                        let id = e
-+                            .attributes()
-+                            .flatten()
-+                            .find(|a| a.key.as_ref() == "idref")
-+                            .map(|a| attr_value(&a))
-+                            .unwrap_or_default();
-+                        spine_order.push(id);
++                            match attr.key.as_ref() {
++                                "idref" => id = attr_value(&attr),
++                                "linear" => linear = attr_value(&attr) != "no",
++                                _ => {}
+                             }
+                         }
++                        spine_order.push((id, linear));
                      }
                      _ => {}
                  }
@@ -2973,19 +2996,33 @@ index 6bdc00e9..8c03452b 100644
 +    for item in &all_items {
 +        by_id.entry(item.0.as_str()).or_insert(item);
 +    }
-+    let spine_ids: HashSet<_> = spine_order.iter().map(String::as_str).collect();
++    let mut spine_by_id = HashMap::new();
++    for (id, linear) in &spine_order {
++        *spine_by_id.entry(id.as_str()).or_insert(false) |= *linear;
++    }
++    let mut roots = HashMap::new();
++    let mut is_section = |id: &str, href: &str, media: &str, spine: Option<bool>| {
++        section_item(id, href, media, spine, || {
++            if let Some(root) = roots.get(href) {
++                return *root;
++            }
++            let root = probe(href);
++            roots.insert(href.to_owned(), root);
++            root
++        })
++    };
 +    let mut seen = HashSet::new();
 +    for (id, href, media, _) in &all_items {
-+        if section_item(id, href, media, spine_ids.contains(id.as_str()))
++        if is_section(id, href, media, spine_by_id.get(id.as_str()).copied())
 +            && seen.insert(href.as_str())
 +        {
 +            info.declared_section_files.push(href.clone());
 +        }
 +    }
 +    seen.clear();
-+    for id in &spine_order {
++    for (id, linear) in &spine_order {
 +        if let Some((id, href, media, _)) = by_id.get(id.as_str()).copied() {
-+            if section_item(id, href, media, true) && seen.insert(href.as_str()) {
++            if is_section(id, href, media, Some(*linear)) && seen.insert(href.as_str()) {
 +                info.spine_section_count += 1;
 +            }
 +            // Retain the upstream navigation contract; the memo audit can detect
@@ -2993,7 +3030,7 @@ index 6bdc00e9..8c03452b 100644
 +            if media == "application/xml" && href.contains("section") {
                  info.section_files.push(href.clone());
              }
-+        } else {
++        } else if *linear {
 +            info.first_unresolved
 +                .get_or_insert(info.spine_section_count);
 +            info.spine_section_count += 1;
@@ -3017,8 +3054,26 @@ index 6bdc00e9..8c03452b 100644
      }
  
      info.section_master_page_files = collect_section_master_pages(&all_items, &info.section_files);
+@@ -323,4 +456,17 @@ mod tests {
+             ]
+         );
+     }
++    #[test]
++    fn final_root_probe_unresolved_non_linear_ref_is_optional() {
++        for (linear, expected) in [("no", None), ("yes", Some((1, 1)))] {
++            let xml = format!(
++                r#"<package><manifest><item id="s0" href="section0.xml" media-type="application/xml"/></manifest><spine><itemref idref="s0"/><itemref idref="typo" linear="{linear}"/></spine></package>"#
++            );
++            let package = parse_content_hpf(&xml).unwrap();
++            assert_eq!(
++                package.omitted_sections(&std::collections::HashSet::from(["section0.xml"]), 1),
++                expected
++            );
++        }
++    }
+ }
 diff --git a/src/parser/hwpx/mod.rs b/src/parser/hwpx/mod.rs
-index 70455077..9f66d044 100644
+index 70455077..267879e6 100644
 --- a/src/parser/hwpx/mod.rs
 +++ b/src/parser/hwpx/mod.rs
 @@ -21,7 +21,7 @@ pub mod utils;
@@ -3293,11 +3348,26 @@ index 70455077..9f66d044 100644
  /// HWPX 파일 바이트 데이터를 파싱하여 Document IR로 변환
  /// [Issue #6208] HWPX `settings.xml` 의 인쇄 방식.
  ///
-@@ -527,22 +741,41 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -452,7 +666,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+         "Contents/content.hpf".to_string(),
+         content_xml.clone().into_bytes(),
+     ));
+-    let package_info = content::parse_content_hpf(&content_xml)?;
++    let package_info =
++        content::parse_content_hpf_with_roots(&content_xml, |path| reader.section_root(path))?;
+ 
+     // 3. header.xml → DocInfo, DocProperties
+     let header_xml = reader.read_file("Contents/header.xml")?;
+@@ -527,22 +742,47 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      // TAC 계약을 쓴다.
      let _hwp3_origin_guard =
          section::Hwp3OriginSourceGuard::set(has_hwp3_origin && !has_hwp5_origin);
 +    let files: HashSet<String> = reader.file_names().into_iter().collect();
++    let declared: HashSet<&str> = package_info
++        .declared_section_files
++        .iter()
++        .map(String::as_str)
++        .collect();
 +    let loaded: HashSet<&str> = package_info
 +        .section_files
 +        .iter()
@@ -3330,7 +3400,8 @@ index 70455077..9f66d044 100644
          match section::parse_hwpx_section(&section_xml) {
              Ok(mut section) => {
 +                section.declared_memo_count = scan.count;
-+                section.memo_problems.section_unreadable = !scan.complete || !scan.section_root;
++                section.memo_problems.section_unreadable = declared.contains(section_href.as_str())
++                    && (!scan.complete || !scan.section_root);
 +                if scan.missing_master_ref {
 +                    section.memo_problems.bad_records += 1;
 +                }
@@ -3342,7 +3413,7 @@ index 70455077..9f66d044 100644
                      eprintln!(
                          "경고: {} masterPage idRef '{}' manifest 항목 없음",
                          section_href, missing_ref
-@@ -550,7 +783,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -550,7 +790,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                  }
  
                  let mut attached_master_page_count = 0usize;
@@ -3352,7 +3423,7 @@ index 70455077..9f66d044 100644
                      if attach_hwpx_master_page(
                          &mut reader,
                          &mut section,
-@@ -565,9 +800,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -565,9 +807,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                      if let Some(master_page_files) =
                          package_info.section_master_page_files.get(section_idx)
                      {
@@ -3363,7 +3434,7 @@ index 70455077..9f66d044 100644
                                  attach_hwpx_master_page(
                                      &mut reader,
                                      &mut section,
-@@ -583,7 +817,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -583,7 +824,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
              Err(e @ HwpxError::DrawingTextStructure(_)) => return Err(e),
              Err(e) => {
                  eprintln!("경고: {} 파싱 실패: {}", section_href, e);
@@ -3371,7 +3442,7 @@ index 70455077..9f66d044 100644
 +                let mut empty = Section {
 +                    declared_memo_count: scan.count,
 +                    memo_problems: MemoParseProblems {
-+                        section_unreadable: true,
++                        section_unreadable: declared.contains(section_href.as_str()),
 +                        ..Default::default()
 +                    },
 +                    ..Default::default()
@@ -3398,7 +3469,7 @@ index 70455077..9f66d044 100644
              }
          }
      }
-@@ -715,6 +975,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -715,6 +982,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      {
          crate::model::hyperlink_format::decode(&mut doc, &bytes);
      }
@@ -3412,10 +3483,85 @@ index 70455077..9f66d044 100644
      Ok(doc)
  }
  
-@@ -786,6 +1053,106 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
+@@ -786,6 +1060,181 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
  mod tests {
      use super::*;
  
++    #[test]
++    fn final_root_probe_distinguishes_sections_and_supplements() {
++        use std::io::{Cursor, Write};
++        // The primary section remains the only legacy render target, except where
++        // its old path filter itself selects the auxiliary "section" filename.
++        for (id, name, spine, xml, missing) in [
++            (
++                "note",
++                "document-section-notes.xml",
++                None,
++                Some("<annotation/>"),
++                false,
++            ),
++            (
++                "note",
++                "document-section-notes.xml",
++                Some("no"),
++                Some("<annotation/>"),
++                false,
++            ),
++            (
++                "note",
++                "chapter.xml",
++                Some("no"),
++                Some("<annotation/>"),
++                false,
++            ),
++            ("section", "notes.xml", None, Some("<sec/>"), true),
++            (
++                "chapter",
++                "chapter.xml",
++                Some("yes"),
++                Some("<x:sec xmlns:x='urn:any'/>"),
++                true,
++            ),
++            ("chapter", "chapter.xml", Some("no"), Some("<sec/>"), true),
++            ("chapter", "chapter.xml", Some("yes"), Some("<broken"), true),
++            ("chapter", "chapter.xml", Some("no"), Some("<broken"), false),
++            ("chapter", "chapter.xml", Some("yes"), None, true),
++            ("chapter", "chapter.xml", Some("no"), None, false),
++            ("note", "document-section-notes.xml", None, None, false),
++            ("section7", "chapter.xml", Some("no"), None, true),
++            ("chapter", "chapter.xml", None, Some("<sec/>"), false),
++            ("note", "backup-section7.xml", None, Some("<wrong/>"), true),
++        ] {
++            let href = format!("Contents/{name}");
++            let itemref = spine
++                .map(|linear| format!(r#"<itemref idref="{id}" linear="{linear}"/>"#))
++                .unwrap_or_default();
++            let hpf = format!(
++                r#"<package><manifest><item id="section0" href="Contents/section0.xml" media-type="application/xml"/><item id="{id}" href="{href}" media-type="text/xml"/></manifest><spine><itemref idref="section0"/>{itemref}</spine></package>"#
++            );
++            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
++            let mut parts = vec![
++                ("Contents/header.xml", "<head secCnt='1'/>"),
++                ("Contents/content.hpf", &hpf),
++                ("Contents/section0.xml", "<sec/>"),
++            ];
++            if let Some(xml) = xml {
++                parts.push((&href, xml));
++            }
++            for (path, data) in parts {
++                zip.start_file(path, zip::write::SimpleFileOptions::default())
++                    .unwrap();
++                zip.write_all(data.as_bytes()).unwrap();
++            }
++            let doc = parse_hwpx(&zip.finish().unwrap().into_inner()).unwrap();
++            assert_eq!(doc.sections.len(), 1);
++            assert_eq!(
++                doc.doc_info.omitted_memo_sections,
++                missing.then_some((1, 1)),
++                "{id} {name} {spine:?} {xml:?}"
++            );
++        }
++    }
 +    #[test]
 +    fn rereview_reconcile_package_declarations_without_counting_attachments() {
 +        use std::io::{Cursor, Write};
@@ -3519,6 +3665,81 @@ index 70455077..9f66d044 100644
      #[test]
      fn test_parse_hwpx_invalid_data() {
          let result = parse_hwpx(&[0u8; 10]);
+diff --git a/src/parser/hwpx/reader.rs b/src/parser/hwpx/reader.rs
+index 35cf5de0..b7c61c63 100644
+--- a/src/parser/hwpx/reader.rs
++++ b/src/parser/hwpx/reader.rs
+@@ -104,6 +104,31 @@ impl HwpxReader {
+         })
+     }
+ 
++    /// A diagnostic-only prefix read. The Take is below the XML buffer so
++    /// neither a long prolog nor a long start tag can inflate the whole member.
++    /// Missing entries, read failures and incomplete prefixes supply no evidence.
++    pub(super) fn section_root(&mut self, path: &str) -> Option<bool> {
++        use quick_xml::{events::Event, Reader};
++        const PREFIX_BYTES: u64 = 64 * 1024;
++        let file = self.archive.by_name(path).ok()?;
++        let mut reader = Reader::from_reader(io::BufReader::new(file.take(PREFIX_BYTES)));
++        let mut buf = Vec::new();
++        loop {
++            match reader.read_event_into(&mut buf).ok()? {
++                Event::Start(e) | Event::Empty(e) => {
++                    if e.attributes().any(|attr| attr.is_err()) {
++                        return None;
++                    }
++                    return Some(super::utils::local_name(e.name().as_ref()) == b"sec");
++                }
++                Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_) => {}
++                Event::Text(t) if t.as_ref().trim().is_empty() => {}
++                _ => return None,
++            }
++            buf.clear();
++        }
++    }
++
+     /// 지정한 경로의 파일을 UTF-8 문자열로 읽는다.
+     ///
+     /// 엔트리 압축 해제 크기는 [`MAX_XML_SIZE`]로 제한된다.
+@@ -237,6 +262,38 @@ impl HwpxReader {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn final_root_probe_is_bounded_and_does_not_charge_document_reads() {
++        use std::io::Write;
++        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
++        for (name, xml) in [
++            (
++                "long.xml",
++                format!(
++                    "<?xml version='1.0'?><!--lead--><s:sec xmlns:s='urn:test'>{}</s:sec>",
++                    "x".repeat(80 * 1024)
++                ),
++            ),
++            (
++                "late.xml",
++                format!("<!--{}--><sec/>", "x".repeat(80 * 1024)),
++            ),
++            ("other.xml", "<annotation/>".into()),
++            ("invalid.xml", "<sec broken".into()),
++        ] {
++            zip.start_file(name, zip::write::SimpleFileOptions::default())
++                .unwrap();
++            zip.write_all(xml.as_bytes()).unwrap();
++        }
++        let mut reader = HwpxReader::open(&zip.finish().unwrap().into_inner()).unwrap();
++        reader.xml_read_remaining = 0;
++        assert_eq!(reader.section_root("long.xml"), Some(true));
++        assert_eq!(reader.section_root("late.xml"), None);
++        assert_eq!(reader.section_root("other.xml"), Some(false));
++        assert_eq!(reader.section_root("invalid.xml"), None);
++        assert_eq!(reader.section_root("absent.xml"), None);
++        assert_eq!(reader.xml_read_remaining, 0);
++    }
+     #[test]
+     fn test_open_invalid_zip() {
+         let result = HwpxReader::open(&[0u8; 100]);
 diff --git a/src/parser/hwpx/section.rs b/src/parser/hwpx/section.rs
 index 8b490f6b..80bd92c2 100644
 --- a/src/parser/hwpx/section.rs

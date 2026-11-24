@@ -112,7 +112,7 @@ export function createController(deps: {
   let threads: MemoThread[] = []
   let shown: ViewState = { page: 0, zoom: 1 }
   let memosOpen = true
-  /** What the reader last did with the list; holds when the open file changes. */
+  /** How the list was first restored or the reader left it since; holds when the open file changes. */
   let chosenOpen: boolean | null = null
 
   function release(): void {
@@ -208,6 +208,9 @@ export function createController(deps: {
       }
       shown = { page, zoom: zoom ?? 1 }
       memosOpen = chosenOpen ?? !closed
+      if (closed || (report !== null && !noMemos)) {
+        chosenOpen = memosOpen
+      }
       threads = report?.threads ?? []
       locate(doc, threads.slice(0, MEMO_BATCH))
       view.prepareMemos({ report, failed: report === null, open: memosOpen })

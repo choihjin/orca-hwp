@@ -12,15 +12,28 @@ export type MemoList = {
   /** The memos could not be read: no button and no list. The status bar says so. */
   fail(): void
   clear(): void
-  toggle(): void
+  /** False when there is no list to open or close. */
+  toggle(): boolean
   isOpen(): boolean
 }
 
 type Item = { thread: MemoThread; button: HTMLButtonElement; anchor: HTMLElement }
 
-/** `m` without a modifier, not held down. With a Hangul layout the same key gives `ㅡ`. */
+/** Height of the page title that sticks to the top, CSS px (`scroll-margin-top` in the style sheet). */
+const PAGE_TITLE = 28
+/** Length of the date tooltip, in code points. */
+const TOOLTIP_LIMIT = 128
+
+/**
+ * `m` without a modifier, not held down and not typed into anything. With a Hangul layout the same
+ * key gives `ㅡ`.
+ */
 export function isMemoKey(event: KeyboardEvent): boolean {
-  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat || event.isComposing) {
+    return false
+  }
+  const target = event.target as Partial<HTMLElement> | null | undefined
+  if (target?.isContentEditable || ['input', 'textarea', 'select'].includes(target?.localName ?? '')) {
     return false
   }
   return event.key.toLowerCase() === 'm' || (event.code === 'KeyM' && event.key === 'ㅡ')
@@ -35,6 +48,14 @@ function element<K extends keyof HTMLElementTagNameMap>(
   el.className = className
   el.append(...content)
   return el
+}
+
+/** One line of plain text: without control characters and the ones that change text direction. */
+function tooltip(text: string): string {
+  const line = text
+    .replace(/\s+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+  return Array.from(line).slice(0, TOOLTIP_LIMIT).join('')
 }
 
 export function createMemoList(options: {
@@ -54,7 +75,7 @@ export function createMemoList(options: {
   /** `1 · 검토자 가 · 11.20 · 표 칸` */
   function meta(memo: Memo, number: string, place: string): HTMLElement {
     const date = element('time', 'memo-date memo-own', shortDate(memo, now()))
-    date.title = fullDate(memo)
+    date.title = tooltip(fullDate(memo))
     const parts = [
       element('span', 'memo-number', number),
       element('span', 'memo-author memo-own', memo.author.trim() === '' ? '(작성자 없음)' : memo.author),
@@ -89,28 +110,105 @@ export function createMemoList(options: {
     return { thread, button, anchor }
   }
 
+  const topOf = (el: HTMLElement) => el.getBoundingClientRect().top - panel.getBoundingClientRect().top
+
+  function isInView(el: HTMLElement, covered = 0): boolean {
+    const r = el.getBoundingClientRect()
+    const view = panel.getBoundingClientRect()
+    return r.height > 0 && r.bottom > view.top + covered && r.top < view.bottom
+  }
+
+  /**
+   * Scrolls with `scroll`. Items that were never on screen have a guessed height (the style sheet's
+   * `content-visibility`); those that are now in view get their own, until none is left that could
+   * still push the others away.
+   */
+  function settle(scroll: () => void): void {
+    scroll()
+    for (;;) {
+      const guessed = items.filter(
+        ({ button }) =>
+          button.style.contentVisibility !== 'visible' &&
+          button.firstElementChild?.checkVisibility({ contentVisibilityAuto: true }) === false &&
+          isInView(button)
+      )
+      if (guessed.length === 0) {
+        return
+      }
+      for (const { button } of guessed) {
+        button.style.contentVisibility = 'visible'
+      }
+      scroll()
+    }
+  }
+
+  function reveal(el: HTMLElement): void {
+    const away = !isInView(el, PAGE_TITLE)
+    settle(() => {
+      // Of an item longer than the list its beginning, unless the reader is in the middle of it.
+      const long = el.getBoundingClientRect().height > panel.getBoundingClientRect().height
+      el.scrollIntoView({ block: away && long ? 'start' : 'nearest' })
+    })
+  }
+
+  /** What stays where it is on screen when the items are placed anew: first what the reader is on. */
+  function keeper(): HTMLElement | undefined {
+    const buttons = items.map((item) => item.button)
+    const on = [
+      buttons.find((el) => el === document.activeElement),
+      buttons.find((el) => el.getAttribute('aria-current') !== null)
+    ].find((el) => el && isInView(el))
+    return on ?? (panel.scrollTop > 0 ? buttons.find((el) => topOf(el) >= 0 && isInView(el)) : undefined)
+  }
+
   /** The items by page, those without a page last, then what could not be read. */
   function place(): void {
     const pages = [...new Set(items.map(({ thread }) => thread.page))].sort((a, b) => (a ?? Infinity) - (b ?? Infinity))
     const order = items.map(({ thread }) => thread.page).join()
-    for (const { thread, anchor } of items) {
-      anchor.hidden = thread.located || anchor.textContent === ''
-    }
-    if (order === placed) {
+    const turned = items.filter(({ thread, anchor }) => anchor.hidden !== (thread.located || anchor.textContent === ''))
+    if (order === placed && turned.length === 0) {
       return
     }
-    placed = order
-    const focused = document.activeElement
-    const { scrollTop } = panel
-    panel.replaceChildren(
-      ...pages.flatMap((page) => [
+    const kept = placed !== null && open ? keeper() : undefined
+    const keptTop = kept ? topOf(kept) : 0
+    for (const { anchor } of turned) {
+      anchor.hidden = !anchor.hidden
+    }
+    if (order !== placed) {
+      placed = order
+      const focused = items.find((item) => item.button === document.activeElement)
+      const next = pages.flatMap((page) => [
         element('h2', 'memo-page', page === null ? '위치 미상' : `${page}쪽`),
         ...items.filter(({ thread }) => thread.page === page).map((item) => item.button)
-      ]),
-      ...problems
-    )
-    panel.scrollTop = scrollTop
-    items.find((item) => item.button === focused)?.button.focus({ preventScroll: true })
+      ])
+      arrange([...next, ...problems])
+      if (focused && document.activeElement !== focused.button) {
+        focused.button.focus({ preventScroll: true })
+      }
+    }
+    if (kept) {
+      settle(() => {
+        panel.scrollTop += topOf(kept) - keptTop
+      })
+    }
+  }
+
+  /** Makes these the panel's children, moving only those that are not in their place. */
+  function arrange(next: HTMLElement[]): void {
+    const stay = new Set<Element>(next)
+    for (const child of Array.from(panel.children)) {
+      if (!stay.has(child)) {
+        child.remove()
+      }
+    }
+    let at = panel.firstElementChild
+    for (const el of next) {
+      if (el === at) {
+        at = at.nextElementSibling
+      } else {
+        panel.insertBefore(el, at)
+      }
+    }
   }
 
   function setOpen(next: boolean): void {
@@ -122,11 +220,13 @@ export function createMemoList(options: {
     button.setAttribute('aria-expanded', String(open))
   }
 
-  function toggle(): void {
-    if (!button.hidden) {
-      setOpen(!open)
-      onToggle(open)
+  function toggle(): boolean {
+    if (button.hidden) {
+      return false
     }
+    setOpen(!open)
+    onToggle(open)
+    return true
   }
 
   function select(number: number): void {
@@ -141,7 +241,7 @@ export function createMemoList(options: {
       button.removeAttribute('aria-current')
     }
     chosen.button.setAttribute('aria-current', 'true')
-    chosen.button.scrollIntoView({ block: 'nearest' })
+    reveal(chosen.button)
   }
 
   function clear(): void {
@@ -154,6 +254,13 @@ export function createMemoList(options: {
   }
 
   button.addEventListener('click', toggle)
+  panel.addEventListener('focusin', ({ target }) => {
+    const item = items.find(({ button }) => button === target)
+    // Not for a mouse: a scroll between press and release would lose the click.
+    if (item?.button.matches(':focus-visible')) {
+      reveal(item.button)
+    }
+  })
 
   return {
     show(report, startOpen) {

@@ -130,15 +130,24 @@ body {
 
 .memo-rect {
   fill: #f59e0b;
-  fill-opacity: 0.3;
+  fill-opacity: 0.2;
+  /* The letters underneath stay as dark as they are. */
   mix-blend-mode: multiply;
 }
 
 .memo-mark.selected .memo-rect {
-  fill-opacity: 0.5;
+  fill-opacity: 0.25;
+}
+
+.memo-underline {
+  display: none;
   stroke: #92400e;
   stroke-width: 1px;
   vector-effect: non-scaling-stroke;
+}
+
+.memo-mark.selected .memo-underline {
+  display: inline;
 }
 
 .memo-badge {
@@ -155,6 +164,12 @@ body {
   text-anchor: middle;
   dominant-baseline: central;
   user-select: none;
+}
+
+/* Room for the scroll bar from the first layout on, so that the pages an agent captures at once
+   are as wide as they stay. Only beside an open list: without one nothing changes. */
+.view:has(+ .memos:not([hidden])) {
+  scrollbar-gutter: stable;
 }
 
 .memos {
@@ -202,6 +217,10 @@ body {
   width: 100%;
   margin: 0;
   padding: 8px 12px;
+  /* Hundreds of long memos must not hold up the first paint: an item is laid out when it comes near
+     the screen. memo-list.ts settles the guessed heights when it scrolls. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
   /* Clear of the page title that sticks to the top. */
   scroll-margin-top: 28px;
   border: 0;

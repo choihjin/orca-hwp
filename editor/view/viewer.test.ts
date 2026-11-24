@@ -380,7 +380,7 @@ const overlayOf = (container: FakeScroller, i: number) =>
 const marksOf = (container: FakeScroller, i: number) =>
   (overlayOf(container, i)?.children ?? []).map((g) => Number(g.getAttribute('data-number')))
 
-test('메모: 그린 쪽 위에 같은 viewBox의 덧그림을 동기로 더한다', () => {
+test('메모: 그린 쪽 위에 같은 viewBox의 덧그림을 동기로 더한다', async () => {
   const restore = installDom()
   try {
     const { container, open, listed } = memoViewer()
@@ -400,6 +400,7 @@ test('메모: 그린 쪽 위에 같은 viewBox의 덧그림을 동기로 더한�
     // Found on the layout: the list hears of it before the first paint.
     assert.equal(t.located, true)
     assert.deepEqual(listed, ['show 1 true', 'refresh'])
+    await settle()
   } finally {
     restore()
   }
@@ -420,7 +421,7 @@ test('메모: 없는 문서의 슬롯에는 덧그림이 없고 글자 배치도
   }
 })
 
-test('메모: 강조가 없는 쪽에는 덧그림이 없고, 글자가 다르면 강조하지 않는다', () => {
+test('메모: 강조가 없는 쪽에는 덧그림이 없고, 글자가 다르면 강조하지 않는다', async () => {
   const restore = installDom()
   try {
     const { container, open } = memoViewer()
@@ -429,6 +430,7 @@ test('메모: 강조가 없는 쪽에는 덧그림이 없고, 글자가 다르�
     assert.equal(overlayOf(container, 0), undefined)
     assert.equal(t.located, false)
     assert.equal(t.page, 1)
+    await settle()
   } finally {
     restore()
   }
@@ -456,7 +458,7 @@ test('메모: 덧그림은 쪽을 버릴 때 함께 사라지고 다시 그리�
   }
 })
 
-test('메모: 시작 글자가 다음 쪽에 있으면 그 쪽으로 고치고 거기에 강조한다', () => {
+test('메모: 시작 글자가 다음 쪽에 있으면 그 쪽으로 고치고 거기에 강조한다', async () => {
   const restore = installDom()
   try {
     for (const [from, to] of [[0, 1], [1, 0]]) {
@@ -469,12 +471,13 @@ test('메모: 시작 글자가 다음 쪽에 있으면 그 쪽으로 고치고 �
       assert.deepEqual(marksOf(container, from), [])
       assert.ok(listed.includes('refresh'))
     }
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 나중에 쪽을 찾은 묶음은 refreshMemos 때 그려 둔 쪽에 나타난다', () => {
+test('메모: 나중에 쪽을 찾은 묶음은 refreshMemos 때 그려 둔 쪽에 나타난다', async () => {
   const restore = installDom()
   try {
     const { container, open, viewer, listed } = memoViewer()
@@ -489,12 +492,13 @@ test('메모: 나중에 쪽을 찾은 묶음은 refreshMemos 때 그려 둔 쪽�
     assert.equal(slotsOf(container)[0].children.length, 2)
     assert.equal(late.located, true)
     assert.ok(listed.includes('refresh'))
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 강조나 번호를 누르면 onMemoPick을 부르고 그 강조만 선택된다', () => {
+test('메모: 강조나 번호를 누르면 onMemoPick을 부르고 그 강조만 선택된다', async () => {
   const restore = installDom()
   try {
     const { container, open, picked } = memoViewer()
@@ -507,6 +511,7 @@ test('메모: 강조나 번호를 누르면 onMemoPick을 부르고 그 강조�
     three.click()
     assert.equal(four.getAttribute('class'), 'memo-mark')
     assert.equal(three.getAttribute('class'), 'memo-mark selected')
+    await settle()
   } finally {
     restore()
   }
@@ -590,7 +595,7 @@ test('메모: 쪽이 없는 묶음의 showMemo는 아무 일도 하지 않는다
   }
 })
 
-test('메모: 번호는 쪽 밖으로 나가지 않는다', () => {
+test('메모: 번호는 쪽 밖으로 나가지 않는다', async () => {
   const restore = installDom()
   try {
     const { container, open } = memoViewer()
@@ -600,12 +605,13 @@ test('메모: 번호는 쪽 밖으로 나가지 않는다', () => {
     const [x, y, w] = ['x', 'y', 'width'].map((name) => Number(badge.getAttribute(name)))
     assert.ok(x >= 0 && x + w <= 793.7, `${x} + ${w}`)
     assert.ok(y >= 0, `${y}`)
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 같은 자리에서 끝나는 두 강조의 번호는 겹치지 않는다', () => {
+test('메모: 같은 자리에서 끝나는 두 강조의 번호는 겹치지 않는다', async () => {
   const restore = installDom()
   try {
     const { container, open } = memoViewer()
@@ -618,12 +624,13 @@ test('메모: 같은 자리에서 끝나는 두 강조의 번호는 겹치지 �
       .map((b) => [Number(b.getAttribute('x')), Number(b.getAttribute('width'))])
     assert.equal(boxes.length, 2)
     assert.ok(boxes[0][0] + boxes[0][1] <= boxes[1][0], JSON.stringify(boxes))
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 그리지 못한 쪽의 묶음은 강조된 것으로 치지 않는다', () => {
+test('메모: 그리지 못한 쪽의 묶음은 강조된 것으로 치지 않는다', async () => {
   const restore = installDom()
   try {
     const { open } = memoViewer()
@@ -634,12 +641,13 @@ test('메모: 그리지 못한 쪽의 묶음은 강조된 것으로 치지 않�
     const t = memoThread(3, 0)
     open(doc, [t])
     assert.equal(t.located, false)
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 글자 배치를 못 읽거나 쪽을 못 그려도 쪽은 그대로다', () => {
+test('메모: 글자 배치를 못 읽거나 쪽을 못 그려도 쪽은 그대로다', async () => {
   const restore = installDom()
   try {
     const { container, open, status } = memoViewer()
@@ -658,12 +666,13 @@ test('메모: 글자 배치를 못 읽거나 쪽을 못 그려도 쪽은 그대�
     open(broken, [memoThread(3, 0)])
     assert.equal(overlayOf(container, 0), undefined)
     assert.equal(slotsOf(container)[0].children[0].className, 'page-error')
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 새 문서를 열면 이전 강조와 선택이 남지 않는다', () => {
+test('메모: 새 문서를 열면 이전 강조와 선택이 남지 않는다', async () => {
   const restore = installDom()
   try {
     const { container, open, viewer, listed } = memoViewer()
@@ -677,12 +686,13 @@ test('메모: 새 문서를 열면 이전 강조와 선택이 남지 않는다',
     viewer.clear()
     viewer.showDocument(bogeonso(), 0, 1)
     assert.equal(overlayOf(container, 0), undefined)
+    await settle()
   } finally {
     restore()
   }
 })
 
-test('메모: 읽지 못하면 상태 줄에 알리고, 오류 화면과 비우기는 목록을 비운다', () => {
+test('메모: 읽지 못하면 상태 줄에 알리고, 오류 화면과 비우기는 목록을 비운다', async () => {
   const restore = installDom()
   try {
     const { viewer, status, listed } = memoViewer()
@@ -696,6 +706,7 @@ test('메모: 읽지 못하면 상태 줄에 알리고, 오류 화면과 비우�
     viewer.prepareMemos({ report: null, failed: true, open: true })
     viewer.clear()
     assert.equal(status.state.memosFailed, false)
+    await settle()
   } finally {
     restore()
   }
@@ -734,6 +745,135 @@ test('메모: 목록을 여닫아 너비가 바뀌면 ResizeObserver 경로로 �
     assert.ok(visiblePages(container).includes(2))
   } finally {
     g.ResizeObserver = saved
+    restore()
+  }
+})
+
+/** The number's box of each mark on a page: x, y, width. */
+function badgesOf(container: FakeScroller, i: number): number[][] {
+  return (overlayOf(container, i)?.children ?? [])
+    .flatMap((g) => g.children.filter((c) => c.getAttribute('class') === 'memo-badge'))
+    .map((b) => ['x', 'y', 'width'].map((name) => Number(b.getAttribute(name))))
+}
+
+test('메모: 번호는 글줄을 가리지 않게 글 위에 띄운다', async () => {
+  const restore = installDom()
+  try {
+    const { container, open } = memoViewer()
+    open(memoDocument({ 0: [memoRun(3)] }), [memoThread(3, 0)])
+    const [[x, y]] = badgesOf(container, 0)
+    assert.equal(x, 150)
+    assert.ok(y + 12 <= 199 && y + 12 >= 198, `bottom at ${y + 12}`)
+    await settle()
+  } finally {
+    restore()
+  }
+})
+
+test('메모: 위 줄과 겹치는 번호는 여백에 둔다', async () => {
+  const restore = installDom()
+  try {
+    const above: AnchorRun = { ...memoRun(2, 180), charX: [0, 60, 120, 180, 240, 300, 360, 420, 480], w: 480 }
+    const at = (runs: AnchorRun[]) => {
+      const { container, open } = memoViewer()
+      open(memoDocument({ 0: runs }), [memoThread(3, 0)])
+      return badgesOf(container, 0)[0]
+    }
+    const [x, y, width] = at([above, memoRun(3)])
+    assert.ok(x >= 580 && x + width <= 793.7, `right of all text, at ${x}`)
+    assert.ok(y >= 200 && y + 12 <= 216, `beside its line, at ${y}`)
+    // Blank text is not in the way.
+    assert.equal(at([{ ...above, text: ' '.repeat(8) }, memoRun(3)])[0], 150)
+    // No room on the right: the left margin.
+    const wide = { ...above, charX: above.charX.map((c) => c * 1.4), w: 690 }
+    const [left, , w] = at([wide, memoRun(3)])
+    assert.ok(left >= 0 && left + w <= 100, `left of all text, at ${left}`)
+    await settle()
+  } finally {
+    restore()
+  }
+})
+
+test('메모: 여백에 둔 같은 줄의 번호들도 겹치지 않는다', async () => {
+  const restore = installDom()
+  try {
+    const { container, open } = memoViewer()
+    const above: AnchorRun = { ...memoRun(2, 180), charX: [0, 60, 120, 180, 240, 300, 360, 420, 480], w: 480 }
+    open(memoDocument({ 0: [above, memoRun(3)] }), [1, 2, 3].map((number) => memoThread(3, 0, { number })))
+    const boxes = badgesOf(container, 0).sort((a, b) => a[0] - b[0])
+    assert.equal(boxes.length, 3)
+    assert.ok(boxes.every(([x], i) => i === 0 || boxes[i - 1][0] + boxes[i - 1][2] <= x), JSON.stringify(boxes))
+    await settle()
+  } finally {
+    restore()
+  }
+})
+
+test('메모: 강조마다 아래쪽에 선이 있다', async () => {
+  const restore = installDom()
+  try {
+    const { container, open } = memoViewer()
+    open(memoDocument({ 0: [memoRun(3)] }), [memoThread(3, 0)])
+    const lines = overlayOf(container, 0)?.children[0].children.filter((c) => c.getAttribute('class') === 'memo-underline') ?? []
+    assert.deepEqual(
+      lines.map((l) => ['x1', 'y1', 'x2', 'y2'].map((name) => Number(l.getAttribute(name)))),
+      [[130, 216, 150, 216]]
+    )
+    await settle()
+  } finally {
+    restore()
+  }
+})
+
+/** A memo on characters `start` to `end` of the run of `paragraph`. */
+function memoOn(number: number, paragraph: number, start: number, end: number, run: AnchorRun): MemoThread {
+  const t = memoThread(paragraph, 0, { number })
+  const text = Array.from(run.text).slice(start, end).join('')
+  Object.assign(t, { anchorText: text, caret: { page: 0, x: run.x + run.charX[start], y: run.y } })
+  Object.assign(t.anchor ?? {}, { startCharIdx: start, endCharIdx: end, start, text })
+  return t
+}
+
+test('메모: 같은 곳에서 끝나는 번호는 번호 순으로 나란하고, 쪽 오른쪽 끝에서는 왼쪽으로 물러난다', async () => {
+  const restore = installDom()
+  try {
+    for (const x of [100, 705]) {
+      const { container, open, picked } = memoViewer()
+      const run = { ...memoRun(3), x }
+      open(memoDocument({ 0: [run] }), [1, 2, 12].map((number, i) => memoOn(number, 3, i, 8, run)))
+      const groups = [...(overlayOf(container, 0)?.children ?? [])]
+      const boxes = groups
+        .map((g) => {
+          const b = g.children.find((c) => c.getAttribute('class') === 'memo-badge')
+          return { number: Number(g.getAttribute('data-number')), x: Number(b?.getAttribute('x')), w: Number(b?.getAttribute('width')) }
+        })
+        .sort((a, b) => a.x - b.x)
+      assert.deepEqual(boxes.map((b) => b.number), [1, 2, 12], `at ${x}`)
+      boxes.forEach((b, i) => {
+        assert.ok(i === 0 || boxes[i - 1].x + boxes[i - 1].w <= b.x, JSON.stringify(boxes))
+        assert.ok(b.x >= 0 && b.x + b.w <= 793.7, JSON.stringify(boxes))
+      })
+      groups.forEach((g) => g.click())
+      assert.deepEqual([...picked].sort((a, b) => a - b), [1, 2, 12])
+    }
+    await settle()
+  } finally {
+    restore()
+  }
+})
+
+test('메모: 겹친 강조는 안쪽 글이 위에 있어 먼저 눌린다', async () => {
+  const restore = installDom()
+  try {
+    for (const [outer, inner] of [[1, 2], [2, 1]]) {
+      const { container, open } = memoViewer()
+      const run = memoRun(3)
+      const threads = [memoOn(outer, 3, 0, 8, run), memoOn(inner, 3, 3, 5, run)].sort((a, b) => a.number - b.number)
+      open(memoDocument({ 0: [run] }), threads)
+      assert.deepEqual(marksOf(container, 0), [outer, inner])
+    }
+    await settle()
+  } finally {
     restore()
   }
 })

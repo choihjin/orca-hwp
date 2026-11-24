@@ -24,11 +24,12 @@ const PAGES_PER_TICK = 2
 /** Zoom steps as multipliers on fit-to-width. */
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
 const SVG_NS = 'http://www.w3.org/2000/svg'
-/** The number beside a highlight, in page px: a pill this high, and how far it reaches below the
- *  top of the line. The rest is above it, between the lines. */
+/** The number of a highlight, in page px: a pill this high, this far above its line or, where that
+ *  would cover the line before, this far from all text in the margin. */
 const BADGE_HEIGHT = 12
-const BADGE_OVERLAP = 3
 const BADGE_DIGIT = 6
+const BADGE_ABOVE = 1.5
+const BADGE_MARGIN = 4
 
 type Layout = ReturnType<typeof pageLayout>
 
@@ -61,35 +62,98 @@ function svgElement(name: string, attributes: Record<string, string | number>): 
 
 const markClass = (selected: boolean) => (selected ? 'memo-mark selected' : 'memo-mark')
 
+type Box = { x: number; y: number; width: number; height: number }
+
+const meet = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+
+const badgeWidth = (number: number) => BADGE_HEIGHT + BADGE_DIGIT * (String(number).length - 1)
+
+/**
+ * Where the numbers go: above the end of their highlight, else in the right or left margin. Memos
+ * that end at one place have theirs side by side, in order.
+ */
+function placeBadges(marks: MemoMark[], page: Box, text: Box[]): Map<MemoMark, Box> {
+  const rows: MemoMark[][] = []
+  for (const mark of marks) {
+    const near = ({ badge }: MemoMark) =>
+      Math.abs(badge.x - mark.badge.x) < BADGE_HEIGHT && Math.abs(badge.y - mark.badge.y) < BADGE_HEIGHT
+    const row = rows.find(([first]) => near(first))
+    if (row) {
+      row.push(mark)
+    } else {
+      rows.push([mark])
+    }
+  }
+  const taken: Box[] = []
+  const placed = new Map<MemoMark, Box>()
+  for (const row of rows) {
+    const { rects, badge } = row[0]
+    const width = row.reduce((sum, { number }) => sum + badgeWidth(number) + 1, -1)
+    const lineHeight = rects.length > 0 ? rects[rects.length - 1].h : BADGE_HEIGHT
+    const beside = badge.y + (lineHeight - BADGE_HEIGHT) / 2
+    const above = Math.max(0, badge.y - BADGE_ABOVE - BADGE_HEIGHT)
+    const left = text.reduce((min, b) => Math.min(min, b.x), badge.x)
+    const right = text.reduce((max, b) => Math.max(max, b.x + b.width), badge.x)
+    // Past the numbers that are already there.
+    const free = (x: number, y: number, step: 1 | -1): Box => {
+      const box = { x, y, width, height: BADGE_HEIGHT }
+      for (let other = taken.find((t) => meet(t, box)); other; other = taken.find((t) => meet(t, box))) {
+        box.x = step > 0 ? other.x + other.width + 1 : other.x - width - 1
+      }
+      return box
+    }
+    const inPage = Math.max(0, Math.min(badge.x, page.width - width))
+    const spots = [
+      free(inPage, above, 1),
+      free(right + BADGE_MARGIN, beside, 1),
+      free(left - BADGE_MARGIN - width, beside, -1)
+    ]
+    const clear = spots.find(
+      (box) =>
+        box.x >= 0 && box.x + width <= page.width && box.y + BADGE_HEIGHT <= page.height &&
+        !text.some((t) => meet(t, box))
+    )
+    // Nowhere is free of text: over it then, but not over another number while the page has room.
+    const spot = clear ?? (spots[0].x + width <= page.width ? spots[0] : { ...spots[0], x: inPage })
+    taken.push(spot)
+    let { x } = spot
+    for (const mark of row) {
+      const own = badgeWidth(mark.number)
+      placed.set(mark, { x, y: spot.y, width: own, height: BADGE_HEIGHT })
+      x += own + 1
+    }
+  }
+  return placed
+}
+
+const textLength = ({ rects }: MemoMark) => rects.reduce((sum, r) => sum + r.w, 0)
+
 /**
  * The highlights of a page, to lie over its SVG with the same `viewBox`. The list says the same to
  * the keyboard and to screen readers.
  */
 function markOverlay(
-  page: { viewBox: string; width: number },
+  page: { viewBox: string; width: number; height: number },
   marks: MemoMark[],
+  runs: AnchorRun[],
   selected: number | null,
   onPick: (number: number) => void
 ): SVGElement {
   const overlay = svgElement('svg', { class: 'memo-marks', viewBox: page.viewBox, 'aria-hidden': 'true' })
-  const badges: { x: number; y: number; right: number }[] = []
-  for (const { number, rects, badge } of marks) {
+  const paper = { x: 0, y: 0, width: page.width, height: page.height }
+  const text = runs.filter((run) => run.text.trim() !== '').map(({ x, y, w, h }) => ({ x, y, width: w, height: h }))
+  const badges = placeBadges(marks, paper, text)
+  // Longest text first: of highlights over one another the innermost is on top, and is clicked.
+  for (const mark of [...marks].sort((a, b) => textLength(b) - textLength(a))) {
+    const { number, rects } = mark
     const group = svgElement('g', { class: markClass(number === selected), 'data-number': number })
-    const width = BADGE_HEIGHT + BADGE_DIGIT * (String(number).length - 1)
-    const y = Math.max(0, badge.y + BADGE_OVERLAP - BADGE_HEIGHT)
-    let x = badge.x
-    // Beside the numbers that are already there: two memos can end at one place.
-    for (const other of badges) {
-      if (Math.abs(other.y - y) < BADGE_HEIGHT && other.x < x + width && x < other.right) {
-        x = other.right + 1
-      }
-    }
-    x = Math.max(0, Math.min(x, page.width - width))
-    badges.push({ x, y, right: x + width })
+    const { x, y, width } = badges.get(mark) as Box
     const label = svgElement('text', { class: 'memo-badge-number', x: x + width / 2, y: y + BADGE_HEIGHT / 2 })
     label.textContent = String(number)
     group.append(
       ...rects.map((r) => svgElement('rect', { class: 'memo-rect', x: r.x, y: r.y, width: r.w, height: r.h })),
+      ...rects.map((r) => svgElement('line', { class: 'memo-underline', x1: r.x, y1: r.y + r.h, x2: r.x + r.w, y2: r.y + r.h })),
       svgElement('rect', { class: 'memo-badge', x, y, width, height: BADGE_HEIGHT, rx: BADGE_HEIGHT / 2 }),
       label
     )
@@ -233,7 +297,7 @@ export function createViewer(options: {
       const marks = drawn.has(i) && !failed.has(i) ? marksOn(i) : []
       if (marks.length > 0) {
         const viewBox = slots[i].children[0].getAttribute('viewBox') ?? ''
-        const overlay = markOverlay({ viewBox, width: sizes[i].width }, marks, selected, pickMemo)
+        const overlay = markOverlay({ viewBox, ...sizes[i] }, marks, runsOf(i), selected, pickMemo)
         slots[i].append(overlay)
         overlays.set(i, overlay)
       }

@@ -542,3 +542,33 @@ test('메모: 빈 한 쪽 문서라도 메모가 있거나 읽지 못했으면 �
     c.dispose()
   }
 })
+
+test('메모: 저장된 닫힘으로 연 문서는 파일이 바뀌어도 닫힌 채다', async () => {
+  const storage = memoryStorage()
+  saveView(storage, documentKey(bytesA), { page: 0, zoom: 1, memosClosed: true })
+  const view = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(2), memoDoc(3)), view, storage })
+  await c.load(bytesA)
+  await c.load(bytesB)
+  assert.deepEqual(states(view).map((s) => s.open), [false, false])
+  c.remember({ page: 1, zoom: 1 })
+  assert.equal(loadView(storage, documentKey(bytesB))?.memosClosed, true)
+  c.dispose()
+})
+
+test('메모: 열린 채 시작한 목록은 파일이 바뀌어도 열린 채고, 목록 없던 문서는 다음 문서의 기억을 막지 않는다', async () => {
+  const storage = memoryStorage()
+  saveView(storage, documentKey(bytesB), { page: 0, zoom: 1, memosClosed: true })
+  const open = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(2), memoDoc(3)), view: open, storage })
+  await c.load(bytesA)
+  await c.load(bytesB)
+  assert.deepEqual(states(open).map((s) => s.open), [true, true])
+  c.dispose()
+  const none = fakeView()
+  const d = createController({ engine: engineOf(fakeDoc('none', 3), memoDoc(3)), view: none, storage })
+  await d.load(bytesA)
+  await d.load(bytesB)
+  assert.deepEqual(states(none).map((s) => s.open), [true, false])
+  d.dispose()
+})

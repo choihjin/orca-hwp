@@ -76,8 +76,7 @@ window.addEventListener('keydown', (event) => {
     }
     return
   }
-  if (isMemoKey(event)) {
-    memoList.toggle()
+  if (isMemoKey(event) && memoList.toggle()) {
     event.preventDefault()
   } else if (viewer.handleKey(event)) {
     event.preventDefault()

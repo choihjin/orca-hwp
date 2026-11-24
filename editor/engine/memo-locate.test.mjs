@@ -216,3 +216,26 @@ test('a page whose layout cannot be read leaves the other threads alone', () => 
   locateThreads(doc, threads, { verify: true })
   assert.deepEqual(threads.map((one) => [one.page, one.located]), [[2, true], [1, false]])
 })
+
+test('a deadline stops after at least one thread and says how many were done', () => {
+  const clock = performance.now
+  let now = 0
+  performance.now = () => now
+  try {
+    const threads = [1, 2, 3, 4].map((number) => thread({ number }))
+    const doc = fakeDoc(0, [here])
+    const { memoCaret } = doc
+    doc.memoCaret = () => {
+      now += 10 // every caret takes 10 ms
+      return memoCaret()
+    }
+    assert.equal(locateThreads(doc, threads, { verify: true, deadline: 25 }), 3)
+    assert.deepEqual(threads.map((t) => t.page), [1, 1, 1, null])
+    assert.equal(locateThreads(doc, threads.slice(3), { verify: true, deadline: 0 }), 1) // already over
+    assert.equal(threads[3].page, 1)
+    assert.equal(locateThreads(doc, threads, { verify: true }), 4)
+    assert.equal(locateThreads(doc, [], { verify: true, deadline: 0 }), 0)
+  } finally {
+    performance.now = clock
+  }
+})

@@ -427,6 +427,29 @@ test('메모: 나머지 묶음은 첫 칠 뒤 50개씩 찾고 그때마다 refre
   c.dispose()
 })
 
+test('메모: 한 묶음이 오래 걸리면 시간 안에 끝난 만큼만 찾고 나머지를 이어서 찾는다', async () => {
+  const clock = performance.now
+  let now = 0
+  performance.now = () => now
+  try {
+    const log: string[] = []
+    const view = fakeView()
+    const doc = memoDoc(30, log)
+    const { memoCaret } = doc
+    doc.memoCaret = (thread) => {
+      now += 40 // 100 ms fits three
+      return memoCaret(thread)
+    }
+    const c = createController({ engine: engineOf(doc), view, storage: null })
+    void c.load(bytesA)
+    assert.equal(log.filter((line) => line.startsWith('caret')).length, 3)
+    await until(() => states(view)[0].report?.threads.every((t) => t.page === 3) === true)
+    c.dispose()
+  } finally {
+    performance.now = clock
+  }
+})
+
 test('메모: 50개 이하면 더 찾지 않는다', async () => {
   const view = fakeView()
   const c = createController({ engine: engineOf(memoDoc(50)), view, storage: null })
@@ -529,7 +552,7 @@ test('메모: 빈 한 쪽 문서라도 메모가 있거나 읽지 못했으면 �
   const withMemo = blank()
   withMemo.memos = () => ({ threads: [memoThread(1)], problems: [] })
   const withProblem = blank()
-  withProblem.memos = () => ({ threads: [], problems: [{ code: 'bad-record' }] })
+  withProblem.memos = () => ({ threads: [], problems: [{ code: 'bad-record', count: 1 }] })
   const unread = blank()
   unread.memos = () => {
     throw new EngineError('engine', 'getMemos')

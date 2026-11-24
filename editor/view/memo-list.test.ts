@@ -335,12 +335,12 @@ test('메모도 문제도 없으면 버튼과 목록이 숨고 여닫기도 없�
 
 test('문제가 있으면 메모가 없어도 버튼을 보이고 목록 끝에 적는다', () => {
   const { panel, button, list } = setup()
-  list.show(report([], [{ code: 'bad-record' }, { code: 'missing-memo', count: 3 }]), true)
+  list.show(report([], [{ code: 'bad-record', count: 2 }, { code: 'missing-memo', count: 3 }]), true)
   assert.equal(button.hidden, false)
   assert.equal(button.textContent, '메모 0')
-  assert.deepEqual(panel.byClass('memo-problem').map((p) => p.textContent), ['읽지 못한 메모 기록이 있음', '메모 3개를 읽지 못함'])
-  list.show(report([thread(1, { page: null })], [{ code: 'bad-record' }]), true)
-  assert.deepEqual(panel.byClass('memo-problem').map((p) => p.textContent), ['읽지 못한 메모 기록이 있음'])
+  assert.deepEqual(panel.byClass('memo-problem').map((p) => p.textContent), ['읽지 못한 메모 기록 2개', '메모 3개를 읽지 못함'])
+  list.show(report([thread(1, { page: null })], [{ code: 'bad-record', count: 1 }]), true)
+  assert.deepEqual(panel.byClass('memo-problem').map((p) => p.textContent), ['읽지 못한 메모 기록 1개'])
   assert.equal(panel.children[panel.children.length - 1].className, 'memo-problem')
 })
 

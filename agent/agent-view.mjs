@@ -15,6 +15,8 @@ import { prepareFonts } from './font-loader.js'
 import { memoOverlay } from './memo-overlay.js'
 import { textLines } from './text-lines.js'
 
+// Time for finding the memos' pages, in ms.
+const memoLocateMs = 10_000
 const engineWasm = new URL('../editor/vendor/rhwp/rhwp_bg.wasm', import.meta.url)
 const resvgWasm = new URL('./vendor/resvg/index_bg.wasm', import.meta.url)
 const maxPixels = 16 * 1024 * 1024 // 64 MiB of RGBA pixels per bitmap.
@@ -221,7 +223,10 @@ function readPageMemos(doc, index, pageSize, region, warnings, textRuns) {
   try {
     const { threads, problems } = doc.memos()
     for (const problem of problems) warnings.push(problemText(problem))
-    locateThreads(doc, threads, { verify: true })
+    // Nobody waits at a screen here, but a paragraph with thousands of memos makes the engine's
+    // caret very slow; the rest then have no page.
+    const done = locateThreads(doc, threads, { verify: true, deadline: performance.now() + memoLocateMs })
+    if (done < threads.length) warnings.push(`시간이 오래 걸려 메모 묶음 ${threads.length - done}개의 쪽을 찾지 못함`)
     const selected = threads.filter((thread) => thread.page === index + 1 && thread.located)
     const overlay = selected.length
       ? memoOverlay(memoMarks(selected, doc.pageAnchorRuns(index), index), pageSize, region,

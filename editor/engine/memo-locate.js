@@ -33,12 +33,14 @@ function atStart(thread) {
 /**
  * Sets `caret`, `page` (from 1) and, when `verify` is set, `located` of each thread. Without `verify`
  * no layout is read, and a thread that is already located stays as it is. Located means the page
- * shows the memo's highlight.
+ * shows the memo's highlight. A `deadline` (ms, `performance.now()`) stops the work early: the threads
+ * from the returned index on are untouched. At least one is done, so repeated calls make progress.
  * @param {MemoPages} doc
  * @param {MemoThread[]} threads
- * @param {{ verify: boolean }} options
+ * @param {{ verify: boolean, deadline?: number }} options
+ * @returns {number} how many threads were looked at
  */
-export function locateThreads(doc, threads, { verify }) {
+export function locateThreads(doc, threads, { verify, deadline }) {
   /** @type {Map<number, AnchorRun[]>} */
   const layouts = new Map()
   /** @param {number} page */
@@ -55,7 +57,8 @@ export function locateThreads(doc, threads, { verify }) {
     return runs
   }
 
-  for (const thread of threads) {
+  for (const [i, thread] of threads.entries()) {
+    if (i > 0 && deadline !== undefined && performance.now() >= deadline) return i
     if (thread.located && !verify) continue
     const caret = NO_PAGE.has(thread.place) ? null : doc.memoCaret(atStart(thread))
     thread.caret = caret
@@ -75,4 +78,5 @@ export function locateThreads(doc, threads, { verify }) {
     thread.page = near[0] + 1
     thread.located = markThread(thread, runsOf(near[0]), near[0]).mark !== null
   }
+  return threads.length
 }

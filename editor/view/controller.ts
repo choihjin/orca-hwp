@@ -39,6 +39,9 @@ export type Controller = {
 
 /** Threads whose page is looked up at a time: about 2 to 5 ms each. */
 const MEMO_BATCH = 50
+/** How long one batch may take, ms: a long paragraph makes each caret slow. The first batch runs
+ *  before the first paint, so it is short enough for the paint to wait for it. */
+const MEMO_BUDGET = 100
 /** Between the batches, ms: lets the first paint and scrolling happen. */
 const MEMO_PAUSE = 16
 
@@ -140,12 +143,16 @@ export function createController(deps: {
     }
   }
 
-  function locate(doc: EngineDocument, some: MemoThread[]): void {
+  /** Finds the pages of the next memos, within the time limit; returns the ones left. */
+  function locate(doc: EngineDocument, rest: MemoThread[]): MemoThread[] {
+    const some = rest.slice(0, MEMO_BATCH)
     try {
-      locateThreads(doc, some, { verify: false })
+      const done = locateThreads(doc, some, { verify: false, deadline: performance.now() + MEMO_BUDGET })
+      return rest.slice(done)
     } catch (error) {
       // The memos are still listed, without a page.
       console.warn(`[hwp-viewer] memo pages: ${String(error)}`)
+      return rest.slice(some.length)
     }
   }
 
@@ -157,9 +164,9 @@ export function createController(deps: {
       if (current !== doc) {
         return
       }
-      locate(doc, rest.slice(0, MEMO_BATCH))
+      const left = locate(doc, rest)
       view.refreshMemos()
-      locateLater(doc, rest.slice(MEMO_BATCH))
+      locateLater(doc, left)
     }, MEMO_PAUSE)
   }
 
@@ -212,10 +219,10 @@ export function createController(deps: {
         chosenOpen = memosOpen
       }
       threads = report?.threads ?? []
-      locate(doc, threads.slice(0, MEMO_BATCH))
+      const left = locate(doc, threads)
       view.prepareMemos({ report, failed: report === null, open: memosOpen })
       view.showDocument(doc, page, zoom ?? 1)
-      locateLater(doc, threads.slice(MEMO_BATCH))
+      locateLater(doc, left)
     },
     remember(state) {
       // Written at once: onViewChange fires only when the page or zoom changes, and an

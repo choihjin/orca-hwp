@@ -124,7 +124,7 @@ function mockMemoPage(dir, entry = {}) {
   writeFileSync(preload, `
     import { HwpDocument } from ${JSON.stringify(rhwp.href)}
     Object.assign(HwpDocument.prototype, {
-      getMemos: () => ${JSON.stringify(JSON.stringify({ memos, problems: [{ code: 'bad-record' }] }))},
+      getMemos: () => ${JSON.stringify(JSON.stringify({ memos, problems: [{ code: 'bad-record', count: 1 }] }))},
       getPageInfo: () => '{"width":100,"height":100}',
       getCursorRect: () => '{"pageIndex":0,"x":65,"y":20,"height":12}',
       getPageTextLayout: () => '{"runs":[{"text":"예산","x":65,"y":20,"w":20,"h":12,"charX":[0,10,20],"secIdx":0,"paraIdx":0,"charStart":0}]}',
@@ -147,7 +147,7 @@ test('memo JSON exposes the whole report and plain output flattens each memo to 
       multiParagraph: false, located: true,
       memos: [{ author: '검토자\n가', date: null, dateText: '11.20', text: '<img onerror=1>\n본문' }]
     }])
-    assert.ok(page.warnings.includes('읽지 못한 메모 기록이 있음'))
+    assert.ok(page.warnings.includes('읽지 못한 메모 기록 1개'))
 
     const plain = spawnSync('node', [...nodeArgs, script, ...args, '--bundled-fonts-only'], {
       cwd: dir, encoding: 'utf8', timeout: 30000

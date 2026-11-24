@@ -3073,7 +3073,7 @@ index 6bdc00e9..c48e3a46 100644
 +    }
  }
 diff --git a/src/parser/hwpx/mod.rs b/src/parser/hwpx/mod.rs
-index 70455077..267879e6 100644
+index 70455077..a50ffdc6 100644
 --- a/src/parser/hwpx/mod.rs
 +++ b/src/parser/hwpx/mod.rs
 @@ -21,7 +21,7 @@ pub mod utils;
@@ -3358,7 +3358,7 @@ index 70455077..267879e6 100644
  
      // 3. header.xml → DocInfo, DocProperties
      let header_xml = reader.read_file("Contents/header.xml")?;
-@@ -527,22 +742,47 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -527,22 +742,44 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      // TAC 계약을 쓴다.
      let _hwp3_origin_guard =
          section::Hwp3OriginSourceGuard::set(has_hwp3_origin && !has_hwp5_origin);
@@ -3379,9 +3379,6 @@ index 70455077..267879e6 100644
      let mut sections = Vec::new();
 +    let mut unattached_master_pages = Vec::new();
      for (section_idx, section_href) in package_info.section_files.iter().enumerate() {
-+        if !files.contains(section_href) {
-+            continue;
-+        }
          let section_xml = reader.read_file(section_href)?;
          let section_xml = canonicalize_bin_item_refs(&section_xml, &package_info.bin_data_items);
 -        let master_page_refs = match section::collect_hwpx_section_master_page_refs(&section_xml) {
@@ -3413,7 +3410,7 @@ index 70455077..267879e6 100644
                      eprintln!(
                          "경고: {} masterPage idRef '{}' manifest 항목 없음",
                          section_href, missing_ref
-@@ -550,7 +790,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -550,7 +787,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                  }
  
                  let mut attached_master_page_count = 0usize;
@@ -3423,7 +3420,7 @@ index 70455077..267879e6 100644
                      if attach_hwpx_master_page(
                          &mut reader,
                          &mut section,
-@@ -565,9 +807,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -565,9 +804,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                      if let Some(master_page_files) =
                          package_info.section_master_page_files.get(section_idx)
                      {
@@ -3434,7 +3431,7 @@ index 70455077..267879e6 100644
                                  attach_hwpx_master_page(
                                      &mut reader,
                                      &mut section,
-@@ -583,7 +824,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -583,7 +821,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
              Err(e @ HwpxError::DrawingTextStructure(_)) => return Err(e),
              Err(e) => {
                  eprintln!("경고: {} 파싱 실패: {}", section_href, e);
@@ -3469,7 +3466,7 @@ index 70455077..267879e6 100644
              }
          }
      }
-@@ -715,6 +982,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -715,6 +979,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      {
          crate::model::hyperlink_format::decode(&mut doc, &bytes);
      }
@@ -3483,10 +3480,52 @@ index 70455077..267879e6 100644
      Ok(doc)
  }
  
-@@ -786,6 +1060,181 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
+@@ -786,6 +1057,223 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
  mod tests {
      use super::*;
  
++    fn package_with_section_members(members: [Option<&str>; 2]) -> Vec<u8> {
++        use std::io::{Cursor, Write};
++        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
++        let sections = ["Contents/section0.xml", "Contents/section1.xml"];
++        let mut parts = vec![
++            ("Contents/header.xml", "<head secCnt='2'/>"),
++            (
++                "Contents/content.hpf",
++                r#"<package><manifest><item id="s0" href="Contents/section0.xml" media-type="application/xml"/><item id="s1" href="Contents/section1.xml" media-type="application/xml"/></manifest><spine><itemref idref="s0"/><itemref idref="s1"/></spine></package>"#,
++            ),
++        ];
++        parts.extend(
++            sections
++                .into_iter()
++                .zip(members)
++                .filter_map(|(path, xml)| xml.map(|s| (path, s))),
++        );
++        for (path, xml) in parts {
++            zip.start_file(path, zip::write::SimpleFileOptions::default())
++                .unwrap();
++            zip.write_all(xml.as_bytes()).unwrap();
++        }
++        zip.finish().unwrap().into_inner()
++    }
++    #[test]
++    fn required_section_missing_member_returns_original_reader_error() {
++        for (members, first_missing) in [([Some("<sec/>"), None], 1), ([None, None], 0)] {
++            let bytes = package_with_section_members(members);
++            let error = parse_hwpx(&bytes).expect_err("selected section is required");
++            assert!(matches!(error, HwpxError::MissingFile(_)));
++            assert_eq!(error.to_string(),format!("필수 파일 누락: Contents/section{first_missing}.xml: specified file not found in archive"));
++        }
++    }
++    #[test]
++    fn required_section_present_empty_member_opens_with_warning() {
++        let bytes = package_with_section_members([Some("<sec/>"), Some("")]);
++        let doc = parse_hwpx(&bytes).unwrap();
++        assert_eq!(doc.sections.len(), 2);
++        assert!(doc.sections[1].memo_problems.section_unreadable);
++        assert_eq!(doc.doc_info.omitted_memo_sections, None);
++    }
++
 +    #[test]
 +    fn final_root_probe_distinguishes_sections_and_supplements() {
 +        use std::io::{Cursor, Write};
@@ -3569,7 +3608,7 @@ index 70455077..267879e6 100644
 +            ("s1", true, "application/xml", 2, None),
 +            ("typo", true, "application/xml", 2, Some((1, 1))),
 +            ("typo", false, "application/xml", 2, Some((1, 1))),
-+            ("s1", false, "application/xml", 2, Some((1, 1))),
++            ("typo", true, "application/xml", 4, Some((1, 3))),
 +            ("s1", true, "application/vnd.example.metadata+xml", 1, None),
 +            ("s1", true, "application/xml", 4, Some((2, 2))),
 +        ] {

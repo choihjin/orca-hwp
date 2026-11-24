@@ -8,7 +8,7 @@
 #   hwp-view.sh --fetch [vX.Y.Z]     # download the plugin (newest tag) into the cache, for machines
 #                                    # without the Orca desktop app; uses the network
 #
-# agent-view options: --page N (from 1) --region x,y,w,h --scale S --out PATH --text --json
+# agent-view options: --page N (from 1) --region x,y,w,h --scale S --out PATH --text --memos --json
 #                     --bundled-fonts-only.  Needs Node.js 22+.
 # Renderer lookup: $HWP_VIEWER_DIR, the plugin installed in Orca, the repository checkout this
 # script sits in, then the cache (${XDG_CACHE_HOME:-~/.cache}/orca-hwp).

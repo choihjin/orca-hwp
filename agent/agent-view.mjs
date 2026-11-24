@@ -5,16 +5,22 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { locateThreads } from '../editor/engine/memo-locate.js'
+import { memoMarks } from '../editor/engine/memo-marks.js'
+import { fullDate, problemText, publicThread, shownAnchorText, shownMemoText } from '../editor/engine/memo-threads.js'
 import { ENGINE_INFO, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { cropPng } from './crop-png.mjs'
 import { prepareFonts } from './font-loader.js'
+import { memoOverlay } from './memo-overlay.js'
 import { textLines } from './text-lines.js'
 
+// Time for finding the memos' pages, in ms.
+const memoLocateMs = 10_000
 const engineWasm = new URL('../editor/vendor/rhwp/rhwp_bg.wasm', import.meta.url)
 const resvgWasm = new URL('./vendor/resvg/index_bg.wasm', import.meta.url)
 const maxPixels = 16 * 1024 * 1024 // 64 MiB of RGBA pixels per bitmap.
-const usage = 'Usage: node agent-view.mjs <file> [--page N] [--region x,y,w,h] [--scale S] [--out PATH] [--text] [--json] [--bundled-fonts-only]'
+const usage = 'Usage: node agent-view.mjs <file> [--page N] [--region x,y,w,h] [--scale S] [--out PATH] [--text] [--memos] [--json] [--bundled-fonts-only]'
 
 class CliError extends Error {
   constructor(code, message) {
@@ -35,6 +41,7 @@ function readOptions(args) {
         scale: { type: 'string', default: '1.5' },
         out: { type: 'string' },
         text: { type: 'boolean' },
+        memos: { type: 'boolean' },
         json: { type: 'boolean' },
         'bundled-fonts-only': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' }
@@ -76,6 +83,7 @@ function readOptions(args) {
     region,
     out: values.out,
     text: values.text,
+    memos: values.memos,
     json: values.json,
     bundledFontsOnly: values['bundled-fonts-only']
   }
@@ -211,12 +219,34 @@ async function renderPng(svg, fontBuffers, pad) {
   }
 }
 
+function readPageMemos(doc, index, pageSize, region, warnings, textRuns) {
+  try {
+    const { threads, problems } = doc.memos()
+    for (const problem of problems) warnings.push(problemText(problem))
+    // Nobody waits at a screen here, but a paragraph with thousands of memos makes the engine's
+    // caret very slow; the rest then have no page.
+    const done = locateThreads(doc, threads, { verify: true, deadline: performance.now() + memoLocateMs })
+    if (done < threads.length) warnings.push(`시간이 오래 걸려 메모 묶음 ${threads.length - done}개의 쪽을 찾지 못함`)
+    const selected = threads.filter((thread) => thread.page === index + 1 && thread.located)
+    const overlay = selected.length
+      ? memoOverlay(memoMarks(selected, doc.pageAnchorRuns(index), index), pageSize, region,
+        (textRuns ?? doc.pageTextRuns(index)).filter(({ text }) => text.trim() !== ''))
+      : ''
+    return { threads, overlay }
+  } catch (error) {
+    const reason = singleLine(error instanceof Error ? error.message : String(error))
+    warnings.push(`메모를 읽지 못함: ${Array.from(reason).slice(0, 200).join('')}`)
+    return { overlay: '' }
+  }
+}
+
 async function renderPage(options) {
   const { file, page, region, scale, bundledFontsOnly } = options
   const outputPath = options.out && resolve(options.out)
   const { bytes, stat } = readInput(file, outputPath)
   await initEngine(readFileSync(engineWasm))
   const doc = openDocument(bytes)
+  let memoReadFailed = false
   try {
     if (page < 1 || page > doc.pageCount) {
       throw new CliError('page-out-of-range', `Page ${page} is outside the document (${doc.pageCount} pages)`)
@@ -229,17 +259,52 @@ async function renderPage(options) {
     const dimensions = scaledDimensions(region ?? pageSize, scale)
     const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
     const warnings = [...result.warnings]
+    // A memo trap can leave the document borrowed. Save requested text before reading memos.
+    const textRuns = options.memos && options.text ? doc.pageTextRuns(index) : undefined
+    const { threads, overlay } = options.memos
+      ? readPageMemos(doc, index, pageSize, region, warnings, textRuns)
+      : { overlay: '' }
+    memoReadFailed = options.memos && threads === undefined
+    const end = overlay ? result.svg.lastIndexOf('</svg>') : -1
+    const svg = end < 0 ? result.svg : result.svg.slice(0, end) + overlay + result.svg.slice(end)
     const viewport = region
-      ? prepareRegion(result.svg, region, pageSize, dimensions)
-      : { svg: prepareSvg(result.svg, dimensions) }
+      ? prepareRegion(svg, region, pageSize, dimensions)
+      : { svg: prepareSvg(svg, dimensions) }
     const fonts = await prepareFonts(viewport.svg, bundledFontsOnly, warnings, result.fontFaces)
-    const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
+    const text = options.text ? textLines(textRuns ?? doc.pageTextRuns(index)) : undefined
     const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, viewport.pad)
     const png = outputPath ?? join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
     writePng(png, pngBytes, stat)
-    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings }
+    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings, threads }
   } finally {
-    doc.dispose()
+    try {
+      doc.dispose()
+    } catch (error) {
+      if (!memoReadFailed) throw error
+    }
+  }
+}
+
+// Terminal and line-separator characters in document text could change how JSON is shown or split;
+// escaped, the parsed values stay the same.
+function escapeControls(json) {
+  return json.replace(/[\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
+function singleLine(text) {
+  return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[\n\u2028\u2029]+/g, ' ')
+}
+
+function printMemos(threads) {
+  for (const thread of threads) {
+    const { number, page, memos } = thread
+    const anchorText = shownAnchorText(thread)
+    const location = page === null ? '위치 미상' : `${page}쪽`
+    for (const memo of memos) {
+      const line = `${number} · ${location} · ${memo.author} · ${fullDate(memo)} · "${anchorText}" → ${shownMemoText(memo)}`
+      console.log(singleLine(line))
+    }
   }
 }
 
@@ -251,12 +316,15 @@ try {
     console.log(usage)
   } else {
     json = options.json
-    const result = await renderPage(options)
+    const { threads, ...result } = await renderPage(options)
     if (json) {
-      console.log(JSON.stringify(result))
+      const output = JSON.stringify({ ...result, memos: threads?.map(publicThread) })
+      console.log(options.memos ? escapeControls(output) : output)
     } else {
       console.log(result.png)
-      for (const line of result.text ?? []) console.log(line)
+      printMemos(threads ?? [])
+      // Like the memo lines: document text must not move the terminal's cursor or split a line.
+      for (const line of result.text ?? []) console.log(options.memos ? singleLine(line) : line)
       for (const warning of result.warnings) console.error(warning)
     }
   }

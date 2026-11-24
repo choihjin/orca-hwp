@@ -102,3 +102,21 @@ test('damaged or invalid entries load as null', () => {
   saveView(storage, 'bad', { page: Number.NaN, zoom: 1 })
   assert.equal(loadView(storage, 'bad'), null)
 })
+
+test('memosClosed is kept with the view; older entries without it still load', () => {
+  const storage = new MemoryStorage()
+  saveView(storage, 'closed', { page: 2, zoom: 1.5, memosClosed: true })
+  assert.deepEqual(loadView(storage, 'closed'), { page: 2, zoom: 1.5, memosClosed: true })
+  saveView(storage, 'closed', { page: 3, zoom: 1 })
+  assert.deepEqual(loadView(storage, 'closed'), { page: 3, zoom: 1 })
+  storage.setItem('hwp-viewer:view:old', '{"page":4,"zoom":2,"seq":1}')
+  assert.deepEqual(loadView(storage, 'old'), { page: 4, zoom: 2 })
+})
+
+test('a memosClosed that is not a boolean is dropped, the page and zoom stay', () => {
+  const storage = new MemoryStorage()
+  for (const raw of ['"yes"', '1', 'null', '{}']) {
+    storage.setItem('hwp-viewer:view:k', `{"page":4,"zoom":2,"memosClosed":${raw},"seq":1}`)
+    assert.deepEqual(loadView(storage, 'k'), { page: 4, zoom: 2 }, raw)
+  }
+})

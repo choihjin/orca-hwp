@@ -4678,6 +4678,22 @@ export class HwpDocument {
         return ret[0] >>> 0;
     }
     /**
+     * 메모와 읽기 문제를 문서 순서로 반환한다.
+     * @returns {string}
+     */
+    getMemos() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.hwpdocument_getMemos(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * 각주/미주 편집 모드 진입 대상 조회
      * @param {number} section_idx
      * @param {number} para_idx

@@ -40,17 +40,38 @@
       "size": 13162
     },
     "patched": {
-      "label": "0.8.7-p1",
-      "reason": "Inline (treat-as-char) tables and shapes in one paragraph got a new page per line after a page break; upstream fix proposed, unreleased",
+      "label": "0.8.7-p2",
+      "reason": "Preserve inline object pagination and expose HWP and HWPX review memos",
       "base": "v0.8.7 (1a76570e833917d15817415a53c09ad61ab3203f)",
-      "patch": {
-        "path": "build/rhwp-patches/v0.8.7-tac-sibling-reset.diff",
-        "sha256": "feb2df0770ababe49e6e06870b3352df85a38a27571ef16e4629986e60765986",
-        "size": 9176
-      },
-      "wasm": {
-        "sha256": "f43f082d6103c5966f92ab99831b17721b5ee4134671049ec7f624c7746c2843",
-        "size": 11805164
+      "patches": [
+        {
+          "path": "build/rhwp-patches/v0.8.7-tac-sibling-reset.diff",
+          "sha256": "feb2df0770ababe49e6e06870b3352df85a38a27571ef16e4629986e60765986",
+          "size": 9176
+        },
+        {
+          "path": "build/rhwp-patches/v0.8.7-memo-list.diff",
+          "sha256": "483879feb9290ce37c92279660a4291fa003aae181aa0961eff738f1c1a0b771",
+          "size": 169353
+        }
+      ],
+      "files": {
+        "rhwp.js": {
+          "sha256": "3637591462c15394b9fdd2e9db4921ad87c7d9bbd23a95d827570b19cc4e6628",
+          "size": 454996
+        },
+        "rhwp.d.ts": {
+          "sha256": "304563742ff7ee158bffd5e26b2eb9a0cbcb04cf19966eab18816d76d0700b89",
+          "size": 183809
+        },
+        "rhwp_bg.wasm": {
+          "sha256": "6b8823f4c796bf806b897bcb4cae3b9e6de267ec32174e403e6fcdd2de59c4ba",
+          "size": 11896394
+        },
+        "rhwp_bg.wasm.d.ts": {
+          "sha256": "b41c8366f78c8d1a152183f4a81bca2b0306f14c4c5e2544fcf7e8a06b745ceb",
+          "size": 61734
+        }
       },
       "toolchain": {
         "rust": "1.93.1",

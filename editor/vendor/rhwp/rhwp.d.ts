@@ -1024,6 +1024,10 @@ export class HwpDocument {
      */
     getLogicalLength(section_idx: number, para_idx: number): number;
     /**
+     * 메모와 읽기 문제를 문서 순서로 반환한다.
+     */
+    getMemos(): string;
+    /**
      * 각주/미주 편집 모드 진입 대상 조회
      */
     getNoteEditInfo(section_idx: number, para_idx: number, control_idx: number): string;
@@ -2749,6 +2753,7 @@ export interface InitOutput {
     readonly hwpdocument_getLineInfoInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly hwpdocument_getLineStarts: (a: number, b: number, c: number) => [number, number];
     readonly hwpdocument_getLogicalLength: (a: number, b: number, c: number) => [number, number, number];
+    readonly hwpdocument_getMemos: (a: number) => [number, number];
     readonly hwpdocument_getNoteEditInfo: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly hwpdocument_getNoteEquationProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly hwpdocument_getNumberingList: (a: number) => [number, number];

@@ -203,6 +203,7 @@ export const hwpdocument_getLineInfo: (a: number, b: number, c: number, d: numbe
 export const hwpdocument_getLineInfoInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const hwpdocument_getLineStarts: (a: number, b: number, c: number) => [number, number];
 export const hwpdocument_getLogicalLength: (a: number, b: number, c: number) => [number, number, number];
+export const hwpdocument_getMemos: (a: number) => [number, number];
 export const hwpdocument_getNoteEditInfo: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const hwpdocument_getNoteEquationProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const hwpdocument_getNumberingList: (a: number) => [number, number];

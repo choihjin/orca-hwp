@@ -55,7 +55,7 @@ const sections = [
     '"한글", "한컴", "HWP", "HWPX"는 주식회사 한글과컴퓨터의 등록 상표입니다. 이 플러그인은 한글과컴퓨터와 관계없는 독립 프로젝트입니다.',
   section(
     pins.rhwp.patched
-      ? `rhwp@${pins.rhwp.version} (MIT), modified by this plugin as ${pins.rhwp.patched.label}: ${pins.rhwp.patched.patch.path}`
+      ? `rhwp@${pins.rhwp.version} (MIT), modified by this plugin as ${pins.rhwp.patched.label}: ${pins.rhwp.patched.patches.map(patch => patch.path).join(' + ')}`
       : `rhwp@${pins.rhwp.version} (MIT)`,
     pins.rhwp.tarball.url,
     engineText,

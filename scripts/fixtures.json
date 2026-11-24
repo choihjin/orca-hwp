@@ -67,6 +67,12 @@
       "path": "scripts/testdata/synthetic-tac-sibling-reset-shapes.hwp",
       "size": 6144,
       "sha256": "c3d2b619ff57fa58bee9deb572d12eb973c212433566f6089aebcbc5811c6b64"
+    },
+    "synthetic-memos.hwp": {
+      "rawBase": "https://raw.githubusercontent.com/choihjin/orca-hwp/54e463f798039d0252d4d120dbce7a49a5f9f6d3/",
+      "path": "synthetic-memos.hwp",
+      "size": 15360,
+      "sha256": "2e10a649b9c0d3bade94c9eb39463b639acad4e96f2544129e6d115ea8dbafbe"
     }
   },
   "derived": {

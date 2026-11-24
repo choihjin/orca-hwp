@@ -2,14 +2,14 @@
 name: hwp-viewer
 skill_type: product-verification
 category: Documents
-description: Use when the user asks how a .hwp or .hwpx (Hangul/한글) document actually looks, whether its tables or page breaks render correctly, or wants a page of it read or checked — renders the page with the Orca HWP Viewer plugin's engine (choihjin.hwp-viewer; the copy installed in Orca, or one fetched on servers and headless Orca) as PNG and text, offline, instead of guessing from raw bytes or text extraction
+description: Use when the user asks how a .hwp or .hwpx (Hangul/한글) document actually looks, whether its tables or page breaks render correctly, or wants a page of it read or checked — renders the page with the Orca HWP Reader plugin's engine (choihjin.hwp-viewer; the copy installed in Orca, or one fetched on servers and headless Orca) as PNG and text, offline, instead of guessing from raw bytes or text extraction
 ---
 
-# HWP Viewer (Orca)
+# HWP Reader (Orca)
 
 ## Purpose
 
-`.hwp`·`.hwpx`는 바이너리·ZIP이라 그냥 읽으면 쪽 배치·표 모양을 알 수 없다. Orca에 설치된 HWP Viewer 플러그인과 같은 엔진(rhwp 0.8.7-p1)으로 쪽을 PNG로 그려 직접 보고, 쪽 텍스트(표 칸 포함)를 받아 판단한다.
+`.hwp`·`.hwpx`는 바이너리·ZIP이라 그냥 읽으면 쪽 배치·표 모양을 알 수 없다. Orca에 설치된 HWP Reader 플러그인과 같은 엔진(rhwp 0.8.7-p1)으로 쪽을 PNG로 그려 직접 보고, 쪽 텍스트(표 칸 포함)를 받아 판단한다.
 
 ## When to Use
 

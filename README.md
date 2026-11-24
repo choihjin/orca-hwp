@@ -1,12 +1,12 @@
-# HWP Viewer for Orca
+# HWP Reader for Orca
 
-<img src="assets/cover.png" alt="The HWP Viewer icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook" width="800">
+<img src="assets/cover.png" alt="The HWP Reader icon and name beside two viewer pages: a table-heavy public notice and the cover of a 383-page handbook" width="800">
 
 A read-only, page-by-page viewer for Hangul word processor documents (`.hwpx`, `.hwp`) inside [Orca](https://github.com/stablyai/orca). Orca's agents can get the same view as a PNG, so they can check how a document actually looks.
 
 [한국어](README.ko.md)
 
-## Status (0.1.4, 2026-11-24)
+## Status (0.1.5, 2026-11-24)
 
 - Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine plus a pagination patch (our own build, `0.8.7-p1`; it fixes a page per table when one paragraph holds many inline tables and text boxes, see the [decision record](docs/decisions/2026-11-20-rhwp-tac-pagination-patch.md), Korean), including tables, images, headers and footers, and mixed portrait and landscape pages.
 - Draws the visible pages first and the rest as you scroll, so the first page of a document with hundreds of pages appears right away.

@@ -323,7 +323,8 @@ try {
     } else {
       console.log(result.png)
       printMemos(threads ?? [])
-      for (const line of result.text ?? []) console.log(line)
+      // Like the memo lines: document text must not move the terminal's cursor or split a line.
+      for (const line of result.text ?? []) console.log(options.memos ? singleLine(line) : line)
       for (const warning of result.warnings) console.error(warning)
     }
   }

@@ -112,7 +112,7 @@ test('a memo WASM trap preserves PNG and text, and only then tolerates a free fa
   })
 })
 
-function mockMemoPage(dir, entry = {}) {
+function mockMemoPage(dir, entry = {}, runText = '예산') {
   const preload = join(dir, 'memo-page.mjs')
   const rhwp = new URL('../editor/vendor/rhwp/rhwp.js', import.meta.url)
   const memos = [{
@@ -127,7 +127,7 @@ function mockMemoPage(dir, entry = {}) {
       getMemos: () => ${JSON.stringify(JSON.stringify({ memos, problems: [{ code: 'bad-record', count: 1 }] }))},
       getPageInfo: () => '{"width":100,"height":100}',
       getCursorRect: () => '{"pageIndex":0,"x":65,"y":20,"height":12}',
-      getPageTextLayout: () => '{"runs":[{"text":"예산","x":65,"y":20,"w":20,"h":12,"charX":[0,10,20],"secIdx":0,"paraIdx":0,"charStart":0}]}',
+      getPageTextLayout: () => JSON.stringify({ runs: [{ text: ${JSON.stringify(runText)}, x: 65, y: 20, w: 20, h: 12, charX: [0, 10, 20], secIdx: 0, paraIdx: 0, charStart: 0 }] }),
       renderPageSvg: () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>'
     })
   `)
@@ -168,6 +168,21 @@ test('plain output says when a memo body was cut short', () => {
     })
     assert.equal(plain.status, 0, plain.stderr)
     assert.ok(plain.stdout.includes('본문 (일부 생략)'), plain.stdout)
+  })
+})
+
+test('with --memos the page text is one line each, without it as it is', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const nodeArgs = mockMemoPage(dir, {}, '앞\u0085뒤\u2028끝\u202e')
+    const args = [sample, '--text', '--out', 'page.png', '--bundled-fonts-only']
+    const run2 = (extra) => spawnSync('node', [...nodeArgs, script, ...args, ...extra], { cwd: dir, encoding: 'utf8', timeout: 30000 })
+    const memos = run2(['--memos'])
+    assert.equal(memos.status, 0, memos.stderr)
+    assert.ok(memos.stdout.includes('앞뒤 끝'), JSON.stringify(memos.stdout))
+    assert.doesNotMatch(memos.stdout, /[\u0085\u2028\u202e]/)
+    const plain = run2([])
+    assert.match(plain.stdout, /앞\u0085뒤/)
   })
 })
 

@@ -5,16 +5,20 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { locateThreads } from '../editor/engine/memo-locate.js'
+import { memoMarks } from '../editor/engine/memo-marks.js'
+import { fullDate, problemText, publicThread } from '../editor/engine/memo-threads.js'
 import { ENGINE_INFO, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { cropPng } from './crop-png.mjs'
 import { prepareFonts } from './font-loader.js'
+import { memoOverlay } from './memo-overlay.js'
 import { textLines } from './text-lines.js'
 
 const engineWasm = new URL('../editor/vendor/rhwp/rhwp_bg.wasm', import.meta.url)
 const resvgWasm = new URL('./vendor/resvg/index_bg.wasm', import.meta.url)
 const maxPixels = 16 * 1024 * 1024 // 64 MiB of RGBA pixels per bitmap.
-const usage = 'Usage: node agent-view.mjs <file> [--page N] [--region x,y,w,h] [--scale S] [--out PATH] [--text] [--json] [--bundled-fonts-only]'
+const usage = 'Usage: node agent-view.mjs <file> [--page N] [--region x,y,w,h] [--scale S] [--out PATH] [--text] [--memos] [--json] [--bundled-fonts-only]'
 
 class CliError extends Error {
   constructor(code, message) {
@@ -35,6 +39,7 @@ function readOptions(args) {
         scale: { type: 'string', default: '1.5' },
         out: { type: 'string' },
         text: { type: 'boolean' },
+        memos: { type: 'boolean' },
         json: { type: 'boolean' },
         'bundled-fonts-only': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' }
@@ -76,6 +81,7 @@ function readOptions(args) {
     region,
     out: values.out,
     text: values.text,
+    memos: values.memos,
     json: values.json,
     bundledFontsOnly: values['bundled-fonts-only']
   }
@@ -211,6 +217,22 @@ async function renderPng(svg, fontBuffers, pad) {
   }
 }
 
+function readPageMemos(doc, index, pageSize, region, warnings) {
+  try {
+    const { threads, problems } = doc.memos()
+    for (const problem of problems) warnings.push(problemText(problem))
+    locateThreads(doc, threads, { verify: true })
+    const selected = threads.filter((thread) => thread.page === index + 1 && thread.located)
+    const overlay = selected.length
+      ? memoOverlay(memoMarks(selected, doc.pageAnchorRuns(index), index), pageSize, region)
+      : ''
+    return { memos: threads.map(publicThread), overlay }
+  } catch {
+    warnings.push('메모를 읽지 못함')
+    return { overlay: '' }
+  }
+}
+
 async function renderPage(options) {
   const { file, page, region, scale, bundledFontsOnly } = options
   const outputPath = options.out && resolve(options.out)
@@ -229,17 +251,32 @@ async function renderPage(options) {
     const dimensions = scaledDimensions(region ?? pageSize, scale)
     const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
     const warnings = [...result.warnings]
+    const { memos, overlay } = options.memos
+      ? readPageMemos(doc, index, pageSize, region, warnings)
+      : { overlay: '' }
+    const end = overlay ? result.svg.lastIndexOf('</svg>') : -1
+    const svg = end < 0 ? result.svg : result.svg.slice(0, end) + overlay + result.svg.slice(end)
     const viewport = region
-      ? prepareRegion(result.svg, region, pageSize, dimensions)
-      : { svg: prepareSvg(result.svg, dimensions) }
+      ? prepareRegion(svg, region, pageSize, dimensions)
+      : { svg: prepareSvg(svg, dimensions) }
     const fonts = await prepareFonts(viewport.svg, bundledFontsOnly, warnings, result.fontFaces)
     const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
     const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, viewport.pad)
     const png = outputPath ?? join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
     writePng(png, pngBytes, stat)
-    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings }
+    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings, memos }
   } finally {
     doc.dispose()
+  }
+}
+
+function printMemos(threads) {
+  for (const { number, page, anchorText, memos } of threads) {
+    const location = page === null ? '위치 미상' : `${page}쪽`
+    for (const memo of memos) {
+      const line = `${number} · ${location} · ${memo.author} · ${fullDate(memo)} · "${anchorText}" → ${memo.text ?? ''}`
+      console.log(line.replace(/[\r\n\u2028\u2029]+/g, ' '))
+    }
   }
 }
 
@@ -256,6 +293,7 @@ try {
       console.log(JSON.stringify(result))
     } else {
       console.log(result.png)
+      printMemos(result.memos ?? [])
       for (const line of result.text ?? []) console.log(line)
       for (const warning of result.warnings) console.error(warning)
     }

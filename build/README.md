@@ -2,7 +2,7 @@
 
 `npm run vendor:fonts`는 rhwp v0.9.1의 WOFF2와 고지를 내려받고
 `fonts.css`와 `manifest.json`을 다시 만든다. `npm run vendor:resvg`는
-resvg-wasm과 woff2-encoder의 해제 전용 파일을 갱신한다. 두 스크립트는
+resvg-wasm을 갱신한다. 두 스크립트는
 `pins.json`의 크기와 SHA-256을 검증한다. `npm run check:size`는
 배포 폴더의 파일 수와 바이트 상한을 검사한다.
 
@@ -18,13 +18,13 @@ resvg-wasm과 woff2-encoder의 해제 전용 파일을 갱신한다. 두 스크�
 13개 TTF·OTF를 플러그인에 넣은 시험에서 글꼴은 51,934,336 B,
 플러그인 폴더는 67,132,409 B였다. 폴더 상한은 52,428,800 B다.
 프레임은 상류 WOFF2 13개(12,558,440 B)를 그대로 사용한다. P2는
-`agent/vendor/woff2/decode.mjs`의 `decodeWoff2(bytes)`로 메모리에서
-TTF·OTF를 복원해 resvg에 넘긴다. 디코더는 npm
-`woff2-encoder@2.0.0`의 해제 전용 모듈이다. 원본은 WASM을 base64
-문자열로 JS 안에 담지만, `vendor:resvg`가 이를 `decompress.wasm`으로
-꺼내고 JS가 그 파일을 읽게 고친다(`pins.json`의 `woff2.wasm`과 대조).
-포장된 코드처럼 보이는 파일은 Orca 커뮤니티 카탈로그에서 심사 대상이
-되기 때문이다. 13개 글꼴의 해제 결과가 고치기 전과 같음을 확인했다.
+`agent/woff2.js`의 `decodeWoff2(bytes)`로 메모리에서 TTF·OTF를 복원해
+resvg에 넘긴다. 이 모듈은 W3C WOFF2 규격을 따라 직접 쓴 것으로, Brotli는
+Node.js의 `node:zlib`을 쓴다. v0.1.3까지는 npm `woff2-encoder@2.0.0`의
+WASM을 썼다. 13개 글꼴의 해제 결과가 그 WASM과 바이트까지 같으며,
+`agent/woff2.test.mjs`가 SHA-256으로 확인한다. 바이트를 맞추기 위해
+복원한 `loca`는 `glyf` 바로 뒤에 두고, 결과가 머리말의 `totalSfntSize`보다
+짧으면 그 크기까지 0으로 채운다(결과의 두 배를 넘는 값은 무시한다).
 
 `manifest.json`의 `families`는 SVG/CSS에서 요청하는 이름이다. resvg가
 글꼴 바이트에서 읽는 이름 중 `Noto Serif KR ExtraLight`는 Noto Serif KR
@@ -34,8 +34,9 @@ TTF·OTF를 복원해 resvg에 넘긴다. 디코더는 npm
 
 ## 해제 및 렌더링 확인
 
-Apple M2 Pro, Node.js 22.22.3에서 각 글꼴을 한 번씩 해제했다. 아래
-시간은 `decodeWoff2` 호출에 걸린 시간이며, 글꼴 파일 읽기와 resvg 렌더링
+Apple M2 Pro, Node.js 22.22.3에서 `check-font-render.mjs`를 11번 실행했다.
+다른 작업이 함께 돌던 때(부하 평균 약 10)의 값이다. 아래 시간은 합계가
+중앙값인 실행에서 `decodeWoff2` 호출에 걸린 시간이며, 글꼴 파일 읽기와 resvg 렌더링
 시간은 제외했다. 각 글꼴을 단독으로 사용해 시스템 글꼴 없이 `한글`을
 그렸고, 옛한글 글꼴은 `ᄒᆞᆫ글`을 그렸다. 빈 글꼴 대조군에서 어두운
 픽셀은 모두 0개였다. 복원된 TTF·OTF와 fontTools 4.62.1에서 같은 원본을
@@ -43,20 +44,22 @@ Apple M2 Pro, Node.js 22.22.3에서 각 글꼴을 한 번씩 해제했다. 아�
 
 | WOFF2 | 해제 시간(ms) | 명도 128 미만 픽셀 |
 | --- | ---: | ---: |
-| NotoSerifKR-Regular | 84.65 | 1,190 |
-| NotoSerifKR-Bold | 51.69 | 1,810 |
-| NotoSansKR-Regular | 20.25 | 1,527 |
-| NotoSansKR-Bold | 18.51 | 2,429 |
-| NotoSansKR-ExtraLight | 22.22 | 855 |
-| Pretendard-Regular | 23.47 | 1,414 |
-| Pretendard-Bold | 23.76 | 2,150 |
-| NanumMyeongjo-Regular | 17.45 | 1,071 |
-| NanumMyeongjo-Bold | 18.75 | 1,445 |
-| D2Coding-Regular | 38.18 | 1,701 |
-| D2Coding-Bold | 38.79 | 2,297 |
-| RHWPPublicBatang-Regular | 65.01 | 909 |
-| RHWPOldHangul-Regular | 4.54 | 979 |
-| 합계 | 427.27 | |
+| NotoSerifKR-Regular | 100.45 | 1,190 |
+| NotoSerifKR-Bold | 104.63 | 1,810 |
+| NotoSansKR-Regular | 43.27 | 1,527 |
+| NotoSansKR-Bold | 27.46 | 2,429 |
+| NotoSansKR-ExtraLight | 31.31 | 855 |
+| Pretendard-Regular | 32.66 | 1,414 |
+| Pretendard-Bold | 32.37 | 2,150 |
+| NanumMyeongjo-Regular | 30.98 | 1,071 |
+| NanumMyeongjo-Bold | 27.88 | 1,445 |
+| D2Coding-Regular | 52.84 | 1,701 |
+| D2Coding-Bold | 49.96 | 2,297 |
+| RHWPPublicBatang-Regular | 84.14 | 909 |
+| RHWPOldHangul-Regular | 3.29 | 979 |
+| 합계 | 621.24 | |
+
+같은 조건에서 번갈아 실행한 v0.1.3의 WASM은 합계 중앙값이 479.04 ms였다.
 
 `node build/check-font-render.mjs`로 13개 글꼴의 해제와 단독 렌더링을
 확인한다. PNG 바이트도 비교하려면 fontTools 4.62.1과 Brotli가 설치된

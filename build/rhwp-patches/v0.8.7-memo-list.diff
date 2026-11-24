@@ -73,10 +73,10 @@ index 9d327c4b..c99774f3 100644
          // set_document이 composed/styles/pagination 벡터를 일관되게 초기화한다.
 diff --git a/src/document_core/queries/memo_list.rs b/src/document_core/queries/memo_list.rs
 new file mode 100644
-index 00000000..304d1672
+index 00000000..f5e128c4
 --- /dev/null
 +++ b/src/document_core/queries/memo_list.rs
-@@ -0,0 +1,1787 @@
+@@ -0,0 +1,1861 @@
 +use crate::document_core::DocumentCore;
 +use crate::model::{
 +    control::{Control, Field, Parameter},
@@ -343,7 +343,7 @@ index 00000000..304d1672
 +                    self.push(&form.caption)?;
 +                    self.push(&form.text)?;
 +                }
-+                Control::HiddenComment(h) => self.block(&h.paragraphs, depth + 1)?,
++                Control::HiddenComment(_) => {}
 +                Control::CharOverlap(c) => {
 +                    for ch in &c.chars {
 +                        self.push(ch.encode_utf8(&mut [0; 4]))?;
@@ -433,6 +433,7 @@ index 00000000..304d1672
 +}
 +
 +struct OpenField {
++    start_boundary: (usize, usize), // text position and number of preceding non-field controls
 +    id: u32,
 +    previous_same_id: Option<usize>,
 +    paragraph: usize,
@@ -453,12 +454,12 @@ index 00000000..304d1672
 +    ) -> std::collections::HashMap<usize, Vec<MemoRange>> {
 +        let mut scope = Self::default();
 +        let mut all = std::collections::HashMap::<usize, Vec<MemoRange>>::new();
-+        let mut open_memos = 0;
++        let mut active_fields = 0usize;
 +        let mut unflagged = std::collections::HashSet::new();
 +        for (serial, p) in paragraphs.enumerate() {
-+            let binary = matches!(p.memo_field_marks.first(), Some(MemoFieldMark::Binary));
++            let mut field_begins = 0;
 +            let mut end_run_until = 0;
-+            let mut common_binary_end = false;
++            let mut common_end = false;
 +            for (mark_idx, &mark) in p.memo_field_marks.iter().enumerate() {
 +                match mark {
 +                    MemoFieldMark::Binary => {}
@@ -466,9 +467,9 @@ index 00000000..304d1672
 +                        let Some(Control::Field(f)) = p.controls.get(control_idx) else {
 +                            continue;
 +                        };
++                        active_fields += 1;
 +                        let memo = memo_number(f).map(|_| {
 +                            let ranges = all.entry(serial).or_default();
-+                            open_memos += 1;
 +                            unflagged.insert((serial, ranges.len()));
 +                            ranges.push(MemoRange {
 +                                ambiguous: false,
@@ -484,7 +485,10 @@ index 00000000..304d1672
 +                        } else {
 +                            scope.last.insert(f.field_id, scope.open.len())
 +                        };
++                        let start_boundary = (pos, control_idx.saturating_sub(field_begins));
++                        field_begins += 1;
 +                        scope.open.push(Some(OpenField {
++                            start_boundary,
 +                            id: f.field_id,
 +                            previous_same_id,
 +                            paragraph: serial,
@@ -496,15 +500,24 @@ index 00000000..304d1672
 +                        control_count,
 +                        pos,
 +                    } => {
-+                        // If every remaining HWP field ends at this exact character
-+                        // and object boundary, exchanging ends cannot change a range.
-+                        // Preserve same-anchor replies without trusting crossed ranges.
-+                        if binary && mark_idx >= end_run_until {
-+                            let same=p.memo_field_marks[mark_idx..].iter().take_while(|m|matches!(m,MemoFieldMark::End{control_count:c,pos:x,..} if *c==control_count && *x==pos)).count();
++                        // Co-located starts and a run closing every live field at one
++                        // character/object boundary give identical ranges in either format.
++                        if mark_idx >= end_run_until {
++                            let same=p.memo_field_marks[mark_idx..].iter().take_while(|m|
++                                matches!(m,MemoFieldMark::End{control_count:c,pos:x,..} if *c==control_count && *x==pos)).count();
 +                            end_run_until = mark_idx + same;
-+                            common_binary_end = same >= scope.open.len();
++                            common_end = same >= active_fields && active_fields > 1 && {
++                                let mut starts = scope
++                                    .open
++                                    .iter()
++                                    .flatten()
++                                    .map(|f| (f.paragraph, f.start_boundary));
++                                let first = starts.next();
++                                starts.all(|s| Some(s) == first)
++                            };
 +                        }
-+                        if begin_id == 0 && open_memos > 1 && !common_binary_end {
++                        let matched = scope.last.get(&begin_id).copied();
++                        if matched.is_none() && active_fields > 1 && !common_end {
 +                            for (para, index) in unflagged.drain() {
 +                                all.get_mut(&para).unwrap()[index].ambiguous = true;
 +                            }
@@ -512,7 +525,8 @@ index 00000000..304d1672
 +                        let Some(top) = scope.open.len().checked_sub(1) else {
 +                            continue;
 +                        };
-+                        let slot = scope.last.get(&begin_id).copied().unwrap_or(top);
++                        let slot = matched.unwrap_or(top);
++                        active_fields -= 1;
 +                        let field = scope.open[slot].take().expect("index of an open field");
 +                        if let Some(older) = field.previous_same_id {
 +                            scope.last.insert(field.id, older);
@@ -523,7 +537,6 @@ index 00000000..304d1672
 +                            scope.open.pop();
 +                        }
 +                        if let Some(i) = field.memo {
-+                            open_memos -= 1;
 +                            unflagged.remove(&(field.paragraph, i));
 +                            if field.paragraph == serial {
 +                                let r = &mut all.get_mut(&serial).unwrap()[i];
@@ -1863,6 +1876,67 @@ index 00000000..304d1672
 +        assert_eq!(ms[0]["anchorKey"], ms[1]["anchorKey"]);
 +        assert!(ms.iter().all(|m| m["ambiguous"] == false));
 +    }
++    #[test]
++    fn rereview_unknown_end_with_regular_field_or_two_memos() {
++        for reference in [0, 99] {
++            for other in [
++                begin(2),
++                r#"<hp:ctrl><hp:fieldBegin id="2" type="HYPERLINK"/></hp:ctrl>"#.into(),
++            ] {
++                let r = read(hwpx_memo_section(&format!(
++                    "{}<hp:t>a</hp:t>{other}<hp:t>b</hp:t>{}<hp:t>c</hp:t>{}",
++                    begin(1),
++                    end(reference),
++                    end(2)
++                )));
++                assert!(r["memos"]
++                    .as_array()
++                    .unwrap()
++                    .iter()
++                    .all(|m| m["ambiguous"] == true));
++            }
++        }
++    }
++    #[test]
++    fn rereview_coincident_xml_closures_are_interchangeable() {
++        let r = read(hwpx_memo_section(&format!(
++            "{}{}<hp:t>abc</hp:t>{}{}",
++            begin(0),
++            begin(1),
++            end(0),
++            end(1)
++        )));
++        for m in r["memos"].as_array().unwrap() {
++            assert_eq!(m["ambiguous"], false);
++            assert_eq!(m["anchorText"], "abc");
++        }
++    }
++    #[test]
++    fn rereview_hidden_comment_does_not_split_visible_body() {
++        let mut p = memo(1);
++        let Control::Field(f) = &mut p.controls[0] else {
++            unreachable!()
++        };
++        f.memo_paragraphs = vec![Paragraph {
++            text: "의견".into(),
++            char_offsets: vec![0, 9],
++            controls: vec![Control::HiddenComment(Box::new(
++                crate::model::control::HiddenComment {
++                    paragraphs: vec![Paragraph {
++                        text: "숨김".into(),
++                        ..Default::default()
++                    }],
++                },
++            ))],
++            ..Default::default()
++        }];
++        let r = read(Section {
++            paragraphs: vec![p],
++            ..Default::default()
++        });
++        assert_eq!(r["memos"][0]["text"], "의견");
++        assert_eq!(r["memos"][0]["textTruncated"], false);
++    }
 +}
 diff --git a/src/document_core/queries/mod.rs b/src/document_core/queries/mod.rs
 index 3a1f8c12..f2d7dd35 100644
@@ -2056,7 +2130,7 @@ index 80a2ee41..4fccc29a 100644
          paragraphs,
          raw_stream: _,
 diff --git a/src/parser/body_text.rs b/src/parser/body_text.rs
-index 036e8bf5..4cb11d4e 100644
+index 036e8bf5..97402e1a 100644
 --- a/src/parser/body_text.rs
 +++ b/src/parser/body_text.rs
 @@ -22,7 +22,7 @@ use super::tags;
@@ -2076,17 +2150,27 @@ index 036e8bf5..4cb11d4e 100644
      tab_extended: Vec<[u16; 7]>,
      title_marks: Vec<TitleMark>,
      orphan_field_ends: Vec<OrphanFieldEnd>,
-@@ -76,10 +77,32 @@ impl std::error::Error for BodyTextError {}
+@@ -76,10 +77,42 @@ impl std::error::Error for BodyTextError {}
  ///
  /// data: 압축 해제된(배포용은 복호화+해제된) 레코드 바이트 스트림
  pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
 -    let records = Record::read_all(data).map_err(|e| BodyTextError::RecordError(e.to_string()))?;
-+    let (records, remainder) = Record::read_all_with_remainder(data)
++    parse_body_text_section_with_padding(data, false)
++}
++
++/// Uncompressed distribution ViewText is decrypted in whole AES blocks. Preserve
++/// the original records and bytes for layout and round-trip, but distinguish its
++/// terminal zero fill from a truncated record header.
++pub(super) fn parse_body_text_section_with_padding(
++    data: &[u8],
++    aes_padded: bool,
++) -> Result<Section, BodyTextError> {
++    let (records, invalid_tail) = Record::read_all_check_tail(data, aes_padded)
 +        .map_err(|e| BodyTextError::RecordError(e.to_string()))?;
      drawing_text_structure::validate(&records)?;
  
 -    let mut section = Section::default();
-+    let section_unreadable = remainder != 0
++    let section_unreadable = invalid_tail
 +        || !records
 +            .iter()
 +            .any(|r| r.tag_id == tags::HWPTAG_PARA_HEADER && r.level == 0 && r.data.len() >= 22);
@@ -2111,7 +2195,7 @@ index 036e8bf5..4cb11d4e 100644
      let mut idx = 0;
  
      while idx < records.len() {
-@@ -116,7 +139,7 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
+@@ -116,7 +149,7 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
      // level=1로 태그되어 마지막 문단의 자식으로 오인됨.
      // 전체 레코드를 재스캔하여 마지막 PARA_HEADER(level=0) 이후의 LIST_HEADER(level=1)를 추출.
      {
@@ -2120,7 +2204,7 @@ index 036e8bf5..4cb11d4e 100644
          let last_para0_idx = all_records
              .iter()
              .rposition(|r| r.tag_id == tags::HWPTAG_PARA_HEADER && r.level == 0);
-@@ -149,6 +172,238 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
+@@ -149,6 +182,238 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
      Ok(section)
  }
  
@@ -2359,7 +2443,7 @@ index 036e8bf5..4cb11d4e 100644
  /// 다단락 필드의 종료 마커에 짝 `fieldBegin` 의 id 를 채운다.
  ///
  /// PARA_TEXT 의 종료 마커에는 짝 id 가 없어서(`04 00 6b 6c 63 09 01 00 …` — ctrl_id
-@@ -296,6 +551,7 @@ pub fn parse_paragraph(records: &[Record]) -> Result<Paragraph, BodyTextError> {
+@@ -296,6 +561,7 @@ pub fn parse_paragraph(records: &[Record]) -> Result<Paragraph, BodyTextError> {
                  para.text = parts.text;
                  para.char_offsets = parts.char_offsets;
                  para.field_ranges = parts.field_ranges;
@@ -2367,7 +2451,7 @@ index 036e8bf5..4cb11d4e 100644
                  para.tab_extended = parts.tab_extended;
                  para.title_marks = parts.title_marks;
                  para.orphan_field_ends = parts.orphan_field_ends;
-@@ -436,6 +692,7 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
+@@ -436,6 +702,7 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
      let mut text = String::with_capacity(data.len());
      let mut char_offsets: Vec<u32> = Vec::with_capacity(n_units);
      let mut field_ranges: Vec<FieldRange> = Vec::new();
@@ -2375,7 +2459,7 @@ index 036e8bf5..4cb11d4e 100644
      let mut tab_extended: Vec<[u16; 7]> = Vec::new();
      let mut title_marks: Vec<TitleMark> = Vec::new();
      let mut orphan_field_ends: Vec<OrphanFieldEnd> = Vec::new();
-@@ -520,9 +777,24 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
+@@ -520,9 +787,24 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
              // 확장/인라인 컨트롤 문자: 8 code unit = 16바이트
              if ch == 0x0003 {
                  // FIELD_BEGIN: 확장 컨트롤 → controls[]에 대응
@@ -2400,7 +2484,7 @@ index 036e8bf5..4cb11d4e 100644
                  // FIELD_END: 인라인 컨트롤 → controls[]에 대응하지 않음
                  if let Some((start_idx, field_ctrl_idx)) = field_stack.pop() {
                      // HWP5 는 인라인 개체도 char_count 를 전진시키므로(8유닛 슬롯)
-@@ -674,6 +946,7 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
+@@ -674,6 +956,7 @@ fn parse_para_text(data: &[u8]) -> ParaTextParts {
          text,
          char_offsets,
          field_ranges,
@@ -2408,7 +2492,7 @@ index 036e8bf5..4cb11d4e 100644
          tab_extended,
          title_marks,
          orphan_field_ends,
-@@ -1262,3 +1535,222 @@ fn parse_ctrl_data_field_name(data: &[u8]) -> Option<String> {
+@@ -1262,3 +1545,269 @@ fn parse_ctrl_data_field_name(data: &[u8]) -> Option<String> {
  
  #[cfg(test)]
  mod tests;
@@ -2630,6 +2714,53 @@ index 036e8bf5..4cb11d4e 100644
 +                .section_unreadable
 +        );
 +    }
++    #[test]
++    fn rereview_distribution_padding_only_at_final_block() {
++        let raw = para(0);
++        let mut padded = raw.clone();
++        padded.resize(raw.len().next_multiple_of(16), 0);
++        assert!(
++            !parse_body_text_section_with_padding(&padded, true)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++        assert!(
++            parse_body_text_section(&padded)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++        let mut reserved_tag = padded.clone();
++        reserved_tag[raw.len()] = 1;
++        assert!(
++            parse_body_text_section_with_padding(&reserved_tag, true)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++        let mut too_long = padded.clone();
++        too_long.extend([0; 16]);
++        assert!(
++            parse_body_text_section_with_padding(&too_long, true)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++        *padded.last_mut().unwrap() = 1;
++        assert!(
++            parse_body_text_section_with_padding(&padded, true)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++        assert!(
++            parse_body_text_section_with_padding(&[0; 16], true)
++                .unwrap()
++                .memo_problems
++                .section_unreadable
++        );
++    }
 +}
 diff --git a/src/parser/body_text/tests.rs b/src/parser/body_text/tests.rs
 index 7e8c05f3..946905a7 100644
@@ -2692,8 +2823,202 @@ index 87e5107d..4a031bdf 100644
      };
      doc.sections.push(section);
  
+diff --git a/src/parser/hwpx/content.rs b/src/parser/hwpx/content.rs
+index 6bdc00e9..8c03452b 100644
+--- a/src/parser/hwpx/content.rs
++++ b/src/parser/hwpx/content.rs
+@@ -27,6 +27,10 @@ pub struct PackageItem {
+ pub struct PackageInfo {
+     /// 섹션 XML 파일 경로 목록 (순서 보존)
+     pub section_files: Vec<String>,
++    /// Declared section paths in manifest order, independent of navigation.
++    declared_section_files: Vec<String>,
++    spine_section_count: usize,
++    first_unresolved: Option<usize>,
+     /// 섹션별 바탕쪽 XML 파일 경로 목록.
+     ///
+     /// HWPX manifest는 masterpage 항목을 section 항목 앞에 배치하는 형태가 관찰된다.
+@@ -41,6 +45,59 @@ pub struct PackageInfo {
+     pub bin_data_items: Vec<PackageItem>,
+ }
+ 
++impl PackageInfo {
++    pub(super) fn omitted_sections(
++        &self,
++        loaded: &std::collections::HashSet<&str>,
++        header_count: usize,
++    ) -> Option<(usize, usize)> {
++        let expected = self
++            .declared_section_files
++            .len()
++            .max(self.spine_section_count)
++            .max(header_count);
++        let loaded_count = self
++            .declared_section_files
++            .iter()
++            .filter(|p| loaded.contains(p.as_str()))
++            .count();
++        let missing = expected.saturating_sub(loaded_count);
++        if missing == 0 {
++            return None;
++        }
++        let first = self
++            .declared_section_files
++            .iter()
++            .position(|p| !loaded.contains(p.as_str()))
++            .into_iter()
++            .chain(self.first_unresolved)
++            .min()
++            .unwrap_or(loaded_count);
++        Some((first, missing))
++    }
++}
++fn section_item(id: &str, href: &str, media: &str, in_spine: bool) -> bool {
++    if media == "application/section+xml"
++        || media.ends_with(".section+xml")
++        || media.ends_with("hwpml-section+xml")
++    {
++        return true;
++    }
++    if media != "application/xml" && media != "text/xml" {
++        return false;
++    }
++    let basename = href.rsplit('/').next().unwrap_or(href).to_ascii_lowercase();
++    let stem = basename.strip_suffix(".xml").unwrap_or(&basename);
++    if stem == "header" || stem == "settings" || stem.starts_with("masterpage") || id == "header" {
++        return false;
++    }
++    let section_token = |token: &str| {
++        token
++            .strip_prefix("section")
++            .is_some_and(|s| s.bytes().all(|b| b.is_ascii_digit()))
++    };
++    in_spine || section_token(&id.to_ascii_lowercase()) || stem.split(['-', '_']).any(section_token)
++}
+ /// content.hpf XML을 파싱하여 섹션/BinData 목록을 추출한다.
+ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+     let mut reader = Reader::from_str(xml);
+@@ -52,13 +109,20 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+     let mut all_items: Vec<(String, String, String, bool)> = Vec::new(); // (id, href, media_type, is_embedded)
+     let mut spine_order: Vec<String> = Vec::new(); // idref 순서
+ 
++    let mut depth = 0usize;
++    let mut manifest_depth = None;
++    let mut spine_depth = None;
+     loop {
+-        match reader.read_event_into(&mut buf) {
++        let event = reader.read_event_into(&mut buf);
++        let start = matches!(event, Ok(Event::Start(_)));
++        match event {
+             Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
+                 let ename = e.name();
+                 let local_name = local_tag_name(ename.as_ref());
+                 match local_name {
+-                    b"item" => {
++                    b"manifest" if start => manifest_depth = Some(depth + 1),
++                    b"spine" if start => spine_depth = Some(depth + 1),
++                    b"item" if manifest_depth == Some(depth) => {
+                         let mut id = String::new();
+                         let mut href = String::new();
+                         let mut media_type = String::new();
+@@ -80,43 +144,77 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
+                             all_items.push((id, href, media_type, is_embedded));
+                         }
+                     }
+-                    b"itemref" => {
+-                        for attr in e.attributes().flatten() {
+-                            if attr.key.as_ref().as_bytes() == b"idref" {
+-                                spine_order.push(attr_value(&attr));
+-                            }
+-                        }
++                    b"itemref" if spine_depth == Some(depth) => {
++                        let id = e
++                            .attributes()
++                            .flatten()
++                            .find(|a| a.key.as_ref() == "idref")
++                            .map(|a| attr_value(&a))
++                            .unwrap_or_default();
++                        spine_order.push(id);
+                     }
+                     _ => {}
+                 }
+             }
++            Ok(Event::End(_)) => {
++                if manifest_depth == Some(depth) {
++                    manifest_depth = None;
++                }
++                if spine_depth == Some(depth) {
++                    spine_depth = None;
++                }
++                depth = depth.saturating_sub(1);
++            }
+             Ok(Event::Eof) => break,
+             Err(e) => return Err(HwpxError::XmlError(format!("content.hpf: {}", e))),
+             _ => {}
+         }
++        if start {
++            depth += 1;
++        }
+         buf.clear();
+     }
+ 
+-    // spine 순서대로 섹션 파일 추출
+-    for idref in &spine_order {
+-        if let Some((_, href, media_type, _)) = all_items.iter().find(|(id, _, _, _)| id == idref) {
+-            if media_type == "application/xml" && href.contains("section") {
++    // An unresolved spine slot and an unused manifest item can describe the same
++    // section. Count each source independently; the header is a third lower bound.
++    use std::collections::{HashMap, HashSet};
++    let mut by_id = HashMap::new();
++    for item in &all_items {
++        by_id.entry(item.0.as_str()).or_insert(item);
++    }
++    let spine_ids: HashSet<_> = spine_order.iter().map(String::as_str).collect();
++    let mut seen = HashSet::new();
++    for (id, href, media, _) in &all_items {
++        if section_item(id, href, media, spine_ids.contains(id.as_str()))
++            && seen.insert(href.as_str())
++        {
++            info.declared_section_files.push(href.clone());
++        }
++    }
++    seen.clear();
++    for id in &spine_order {
++        if let Some((id, href, media, _)) = by_id.get(id.as_str()).copied() {
++            if section_item(id, href, media, true) && seen.insert(href.as_str()) {
++                info.spine_section_count += 1;
++            }
++            // Retain the upstream navigation contract; the memo audit can detect
++            // declarations it does not visit without changing existing layout.
++            if media == "application/xml" && href.contains("section") {
+                 info.section_files.push(href.clone());
+             }
++        } else {
++            info.first_unresolved
++                .get_or_insert(info.spine_section_count);
++            info.spine_section_count += 1;
+         }
+     }
+-
+-    // spine에 없는 섹션도 manifest에서 추출 (fallback)
+     if info.section_files.is_empty() {
+-        let mut section_items: Vec<_> = all_items
++        info.section_files = all_items
+             .iter()
+-            .filter(|(_, href, mt, _)| mt == "application/xml" && href.contains("section"))
+-            .collect();
+-        section_items.sort_by(|a, b| a.1.cmp(&b.1));
+-        info.section_files = section_items
+-            .into_iter()
++            .filter(|(_, href, media, _)| media == "application/xml" && href.contains("section"))
+             .map(|(_, href, _, _)| href.clone())
+             .collect();
++        info.section_files.sort();
+     }
+ 
+     info.section_master_page_files = collect_section_master_pages(&all_items, &info.section_files);
 diff --git a/src/parser/hwpx/mod.rs b/src/parser/hwpx/mod.rs
-index 70455077..17996114 100644
+index 70455077..9f66d044 100644
 --- a/src/parser/hwpx/mod.rs
 +++ b/src/parser/hwpx/mod.rs
 @@ -21,7 +21,7 @@ pub mod utils;
@@ -2890,7 +3215,7 @@ index 70455077..17996114 100644
  fn attach_hwpx_master_page(
      reader: &mut reader::HwpxReader,
      section: &mut Section,
-@@ -337,22 +515,36 @@ fn attach_hwpx_master_page(
+@@ -337,28 +515,64 @@ fn attach_hwpx_master_page(
      bin_data_items: &[content::PackageItem],
  ) -> Result<bool, HwpxError> {
      match reader.read_file(master_page_href) {
@@ -2940,33 +3265,53 @@ index 70455077..17996114 100644
              eprintln!("경고: {} 읽기 실패: {}", master_page_href, e);
              Ok(false)
          }
-@@ -527,22 +719,49 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+     }
+ }
+ 
++fn header_section_count(xml: &str) -> usize {
++    use quick_xml::{events::Event, Reader};
++    let mut reader = Reader::from_str(xml);
++    loop {
++        match reader.read_event() {
++            Ok(Event::Start(e) | Event::Empty(e)) => {
++                if utils::local_name(e.name().as_ref()) != b"head" {
++                    return 0;
++                }
++                return e
++                    .attributes()
++                    .flatten()
++                    .find(|a| a.key.as_ref() == "secCnt")
++                    .and_then(|a| utils::attr_str(&a).parse::<u32>().ok())
++                    .unwrap_or(0) as usize;
++            }
++            Ok(Event::Eof) | Err(_) => return 0,
++            _ => {}
++        }
++    }
++}
++
+ /// HWPX 파일 바이트 데이터를 파싱하여 Document IR로 변환
+ /// [Issue #6208] HWPX `settings.xml` 의 인쇄 방식.
+ ///
+@@ -527,22 +741,41 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      // TAC 계약을 쓴다.
      let _hwp3_origin_guard =
          section::Hwp3OriginSourceGuard::set(has_hwp3_origin && !has_hwp5_origin);
-+    let parsed: HashSet<_> = package_info
++    let files: HashSet<String> = reader.file_names().into_iter().collect();
++    let loaded: HashSet<&str> = package_info
 +        .section_files
 +        .iter()
 +        .map(String::as_str)
++        .filter(|path| files.contains(*path))
 +        .collect();
-+    for path in reader.file_names() {
-+        if parsed.contains(path.as_str()) {
-+            continue;
-+        }
-+        let lower = path.to_ascii_lowercase();
-+        if let Some(index) = lower
-+            .strip_prefix("contents/section")
-+            .and_then(|n| n.strip_suffix(".xml"))
-+            .and_then(|n| n.parse::<usize>().ok())
-+        {
-+            let (first, count) = doc_info.omitted_memo_sections.get_or_insert((index, 0));
-+            *first = (*first).min(index);
-+            *count += 1;
-+        }
-+    }
++    doc_info.omitted_memo_sections =
++        package_info.omitted_sections(&loaded, header_section_count(&header_xml));
      let mut sections = Vec::new();
 +    let mut unattached_master_pages = Vec::new();
      for (section_idx, section_href) in package_info.section_files.iter().enumerate() {
++        if !files.contains(section_href) {
++            continue;
++        }
          let section_xml = reader.read_file(section_href)?;
          let section_xml = canonicalize_bin_item_refs(&section_xml, &package_info.bin_data_items);
 -        let master_page_refs = match section::collect_hwpx_section_master_page_refs(&section_xml) {
@@ -2997,7 +3342,7 @@ index 70455077..17996114 100644
                      eprintln!(
                          "경고: {} masterPage idRef '{}' manifest 항목 없음",
                          section_href, missing_ref
-@@ -550,7 +769,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -550,7 +783,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                  }
  
                  let mut attached_master_page_count = 0usize;
@@ -3007,7 +3352,7 @@ index 70455077..17996114 100644
                      if attach_hwpx_master_page(
                          &mut reader,
                          &mut section,
-@@ -565,9 +786,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -565,9 +800,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                      if let Some(master_page_files) =
                          package_info.section_master_page_files.get(section_idx)
                      {
@@ -3018,7 +3363,7 @@ index 70455077..17996114 100644
                                  attach_hwpx_master_page(
                                      &mut reader,
                                      &mut section,
-@@ -583,7 +803,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -583,7 +817,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
              Err(e @ HwpxError::DrawingTextStructure(_)) => return Err(e),
              Err(e) => {
                  eprintln!("경고: {} 파싱 실패: {}", section_href, e);
@@ -3046,14 +3391,14 @@ index 70455077..17996114 100644
 +                let mut seen = HashSet::new();
 +                for href in hrefs {
 +                    if seen.insert(href) {
-+                        unattached_master_pages.push((section_idx, href));
++                        unattached_master_pages.push((sections.len(), href));
 +                    }
 +                }
 +                sections.push(empty);
              }
          }
      }
-@@ -715,6 +961,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+@@ -715,6 +975,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
      {
          crate::model::hyperlink_format::decode(&mut doc, &bytes);
      }
@@ -3067,10 +3412,48 @@ index 70455077..17996114 100644
      Ok(doc)
  }
  
-@@ -786,6 +1039,68 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
+@@ -786,6 +1053,106 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
  mod tests {
      use super::*;
  
++    #[test]
++    fn rereview_reconcile_package_declarations_without_counting_attachments() {
++        use std::io::{Cursor, Write};
++        for (idref, has_xml, kind, header, missing) in [
++            ("s1", true, "application/xml", 2, None),
++            ("typo", true, "application/xml", 2, Some((1, 1))),
++            ("typo", false, "application/xml", 2, Some((1, 1))),
++            ("s1", false, "application/xml", 2, Some((1, 1))),
++            ("s1", true, "application/vnd.example.metadata+xml", 1, None),
++            ("s1", true, "application/xml", 4, Some((2, 2))),
++        ] {
++            let xml = format!(
++                r#"<package><manifest><item id="header" href="Contents/header.xml" media-type="application/xml"/><item id="s0" href="Contents/section0.xml" media-type="application/xml"/><item id="s1" href="Contents/review-section.xml" media-type="{kind}"/><item id="metadata" href="Contents/section99.xml" media-type="application/vnd.example.metadata+xml"/></manifest><spine><itemref idref="header"/><itemref idref="s0"/><itemref idref="{idref}"/></spine></package>"#
++            );
++            let head = format!(r#"<head secCnt="{header}"/>"#);
++            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
++            let mut parts = vec![
++                ("Contents/content.hpf", xml.as_str()),
++                ("Contents/header.xml", head.as_str()),
++                ("Contents/section0.xml", "<sec/>"),
++                ("Contents/section99.xml", "<meta/>"),
++                ("Contents/section88.xml", "<backup/>"),
++            ];
++            if has_xml {
++                parts.push(("Contents/review-section.xml", "<sec/>"));
++            }
++            for (n, v) in parts {
++                zip.start_file(n, zip::write::SimpleFileOptions::default())
++                    .unwrap();
++                zip.write_all(v.as_bytes()).unwrap();
++            }
++            let doc = parse_hwpx(&zip.finish().unwrap().into_inner()).unwrap();
++            assert_eq!(
++                doc.doc_info.omitted_memo_sections, missing,
++                "{idref}/{has_xml}/{kind}/{header}"
++            );
++        }
++    }
 +    #[test]
 +    fn final_review_missing_spine_and_wrong_root_leave_original_page_structure() {
 +        use std::io::{Cursor, Write};
@@ -3351,7 +3734,7 @@ index 8b490f6b..80bd92c2 100644
          // [#2727] HWPX lineMode → EQEDIT attribute bit0
          attr: eq_attr,
 diff --git a/src/parser/mod.rs b/src/parser/mod.rs
-index e4467db3..3b89c6f3 100644
+index e4467db3..f36d45a6 100644
 --- a/src/parser/mod.rs
 +++ b/src/parser/mod.rs
 @@ -17,6 +17,24 @@
@@ -3379,7 +3762,19 @@ index e4467db3..3b89c6f3 100644
  pub mod byte_reader;
  pub mod cfb_reader;
  pub mod control;
-@@ -883,7 +901,7 @@ fn parse_sections_strict(
+@@ -871,7 +889,10 @@ fn parse_sections_strict(
+             .consume(section_data.len())
+             .map_err(ParseError::CfbError)?;
+ 
+-        match body_text::parse_body_text_section(&section_data) {
++        match body_text::parse_body_text_section_with_padding(
++            &section_data,
++            distribution && !compressed,
++        ) {
+             Ok(mut section) => {
+                 // 원본 BodyText 스트림 보존 (라운드트립용)
+                 section.raw_stream = Some(section_data);
+@@ -883,7 +904,7 @@ fn parse_sections_strict(
              Err(e) => {
                  // 개별 섹션 파싱 실패 시 빈 섹션으로 대체 (전체 실패 방지)
                  eprintln!("경고: Section{} 파싱 실패: {}", i, e);
@@ -3388,7 +3783,7 @@ index e4467db3..3b89c6f3 100644
              }
          }
      }
-@@ -891,6 +909,7 @@ fn parse_sections_strict(
+@@ -891,6 +912,7 @@ fn parse_sections_strict(
      // [#6868 잔여] 구역 경계를 넘는 누름틀의 종료 마커를 잇는다 — 구역 하나를 파싱하는
      // 동안에는 앞 구역에서 열린 필드를 볼 수 없다.
      body_text::link_orphan_field_ends_across_sections(&mut sections);
@@ -3396,7 +3791,19 @@ index e4467db3..3b89c6f3 100644
  
      Ok(sections)
  }
-@@ -1000,13 +1019,14 @@ fn parse_hwp_with_lenient(
+@@ -990,7 +1012,10 @@ fn parse_hwp_with_lenient(
+             .consume(section_data.len())
+             .map_err(ParseError::CfbError)?;
+ 
+-        match body_text::parse_body_text_section(&section_data) {
++        match body_text::parse_body_text_section_with_padding(
++            &section_data,
++            distribution && !compressed,
++        ) {
+             Ok(mut section) => {
+                 section.raw_stream = Some(section_data);
+                 sections.push(section);
+@@ -1000,13 +1025,14 @@ fn parse_hwp_with_lenient(
              }
              Err(e) => {
                  eprintln!("경고: Section{} 파싱 실패 (lenient): {}", i, e);
@@ -3412,7 +3819,7 @@ index e4467db3..3b89c6f3 100644
  
      // BinData 로드 시도
      let bin_data_content = load_bin_data_content_lenient(
-@@ -3085,6 +3105,16 @@ mod tests {
+@@ -3085,6 +3111,16 @@ mod tests {
          compound.into_inner().into_inner()
      }
  
@@ -3430,27 +3837,48 @@ index e4467db3..3b89c6f3 100644
          use flate2::write::DeflateEncoder;
          use flate2::Compression;
 diff --git a/src/parser/record.rs b/src/parser/record.rs
-index 2269383f..c93db357 100644
+index 2269383f..b0ccd1c3 100644
 --- a/src/parser/record.rs
 +++ b/src/parser/record.rs
-@@ -32,6 +32,11 @@ impl Record {
+@@ -32,8 +32,15 @@ impl Record {
  
      /// 바이트 스트림에서 모든 레코드를 파싱
      pub fn read_all(data: &[u8]) -> Result<Vec<Record>, RecordError> {
-+        Self::read_all_with_remainder(data).map(|(records, _)| records)
++        Self::read_all_check_tail(data, false).map(|(records, _)| records)
 +    }
-+    pub(super) fn read_all_with_remainder(
++    pub(super) fn read_all_check_tail(
 +        data: &[u8],
-+    ) -> Result<(Vec<Record>, usize), RecordError> {
++        allow_aes_padding: bool,
++    ) -> Result<(Vec<Record>, bool), RecordError> {
          let mut cursor = Cursor::new(data);
          let mut records = Vec::new();
++        let mut padding_start = None;
  
-@@ -86,7 +91,7 @@ impl Record {
+         while (cursor.position() as usize) < data.len() {
+             let remaining = data.len() - cursor.position() as usize;
+@@ -46,6 +53,9 @@ impl Record {
+                 .map_err(|e| RecordError::IoError(e.to_string()))?;
+ 
+             let tag_id = (header & 0x3FF) as u16;
++            if allow_aes_padding && tag_id < tags::HWPTAG_BEGIN && padding_start.is_none() {
++                padding_start = Some(data.len() - remaining);
++            }
+             let level = ((header >> 10) & 0x3FF) as u16;
+             let mut size = (header >> 20) as u32;
+ 
+@@ -86,7 +96,14 @@ impl Record {
              });
          }
  
 -        Ok(records)
-+        Ok((records, data.len() - cursor.position() as usize))
++        let tail = &data[padding_start.unwrap_or(cursor.position() as usize)..];
++        // Only the zero-filled suffix of the last AES block may look like empty
++        // records and/or a partial header. Check the raw bytes including headers.
++        let valid_padding = allow_aes_padding
++            && data.len().is_multiple_of(16)
++            && tail.len() < 16
++            && tail.iter().all(|&b| b == 0);
++        Ok((records, !tail.is_empty() && !valid_padding))
      }
  }
  

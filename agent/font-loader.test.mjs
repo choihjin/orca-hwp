@@ -7,7 +7,7 @@ import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { prepareFonts } from './font-loader.js'
 import { hasRequestedFamily } from './sfnt.js'
 import { initWasm, Resvg } from './vendor/resvg/index.mjs'
-import { decodeWoff2 } from './vendor/woff2/decode.mjs'
+import { decodeWoff2 } from './woff2.js'
 
 await initWasm(readFileSync(new URL('./vendor/resvg/index_bg.wasm', import.meta.url)))
 

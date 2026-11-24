@@ -267,45 +267,5 @@
       "sha256": "4b89d4518bd135ab4ee154a7bce722246b57a98c3d7efc1a09409898160c2bd1",
       "size": 16724
     }
-  },
-  "woff2": {
-    "version": "2.0.0",
-    "upstreamCommit": "6a84f674374bbf56e7ffa78dea7a22878b58e0f9",
-    "tarball": {
-      "url": "https://registry.npmjs.org/woff2-encoder/-/woff2-encoder-2.0.0.tgz",
-      "sha256": "579d13c0474c84ae1e96a180178de3afcbe397fcb414329174420012389eaeba",
-      "size": 550466,
-      "files": {
-        "package/dist/decompress.js": {
-          "sha256": "6910ba38d0a981513b297701d309fa2efc4f67a311815bcc4de5837085d2ee46",
-          "size": 295397
-        },
-        "package/LICENSE": {
-          "sha256": "2947f101e074fa72859ae25cf21b8d434a710e7d5b81a1d0ab312f52528b3e4b",
-          "size": 1100
-        }
-      }
-    },
-    "licenses": {
-      "LICENSE-WOFF2": {
-        "url": "https://raw.githubusercontent.com/google/woff2/4721483ad780ee2b63cb787bfee4aa64b61a0446/LICENSE",
-        "sha256": "d42a3e363d99da22b860ab760faa37dfa9781d74c9f3ed634d05109081616513",
-        "size": 1071
-      },
-      "LICENSE-Brotli": {
-        "url": "https://raw.githubusercontent.com/google/brotli/533843e3546cd24c8344eaa899c6b0b681c8d222/LICENSE",
-        "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
-        "size": 1084
-      },
-      "LICENSE-Emscripten": {
-        "url": "https://raw.githubusercontent.com/emscripten-core/emscripten/19607820c447a13fd8d0b7680c56148427d6e1b8/LICENSE",
-        "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86",
-        "size": 5093
-      }
-    },
-    "wasm": {
-      "sha256": "863f026691f250f24d9c8b4b15284d60bdbee60f3e05010585557b2c5b6a7500",
-      "size": 209111
-    }
   }
 }

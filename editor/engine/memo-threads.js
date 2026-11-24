@@ -389,12 +389,16 @@ function isAnchorTextCut({ anchorText, anchor, ambiguous }) {
   return !known || length < Number(anchor.endCharIdx) - Number(anchor.startCharIdx)
 }
 
+/** A memo whose text is not certain to be known: which text it is on cannot be told. */
+const UNKNOWN_ANCHOR = '(기준 글을 확실히 알 수 없음)'
+
 /**
  * The text the memo is on for people to read, with `…` when the engine cut it short.
  * @param {MemoThread} thread
  * @returns {string}
  */
 export function shownAnchorText(thread) {
+  if (thread.ambiguous) return UNKNOWN_ANCHOR
   return isAnchorTextCut(thread) ? `${thread.anchorText}…` : thread.anchorText
 }
 
@@ -410,20 +414,21 @@ export function shownMemoText({ text, textTruncated }) {
 }
 
 /**
- * The thread as agents get it: a copy without the engine position.
+ * The thread as agents get it: a copy without the engine position. The text of an ambiguous memo is left out, as it could be the text of another memo.
  * @param {MemoThread} thread
- * @returns {Omit<MemoThread, 'anchor' | 'caret' | 'ambiguous'> & { anchorTextTruncated: boolean }}
+ * @returns {Omit<MemoThread, 'anchor' | 'caret' | 'ambiguous'> & { ambiguous: boolean, anchorTextTruncated: boolean }}
  */
 export function publicThread(thread) {
   return {
     number: thread.number,
     page: thread.page,
     place: thread.place,
-    anchorText: thread.anchorText,
+    anchorText: thread.ambiguous ? '' : thread.anchorText,
     paragraphText: thread.paragraphText,
     multiParagraph: thread.multiParagraph,
     located: thread.located,
-    anchorTextTruncated: isAnchorTextCut(thread),
+    ambiguous: thread.ambiguous === true,
+    anchorTextTruncated: !thread.ambiguous && isAnchorTextCut(thread),
     memos: thread.memos.map((memo) => ({ ...memo }))
   }
 }

@@ -144,7 +144,7 @@ test('memo JSON exposes the whole report and plain output flattens each memo to 
     const page = JSON.parse(result.stdout)
     assert.deepEqual(page.memos, [{
       number: 1, page: 1, place: 'body', anchorText: '예산', paragraphText: '예산',
-      multiParagraph: false, located: true, anchorTextTruncated: false,
+      multiParagraph: false, located: true, ambiguous: false, anchorTextTruncated: false,
       memos: [{ author: '검토자\n가', date: null, dateText: '11.20', text: '<img onerror=1>\n본문', textTruncated: false }]
     }])
     assert.ok(page.warnings.includes('읽지 못한 메모 기록 1개'))

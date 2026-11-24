@@ -56,7 +56,7 @@ node "$PLUGIN_DIR/agent/agent-view.mjs" "$HWP_FILE" --page 3 --region 80,200,450
 - `--region x,y,w,h`는 쪽 왼쪽 위를 원점으로 한 쪽의 픽셀 좌표입니다. 생략하면 전체 쪽을 그립니다. `--scale`의 기본값은 1.5입니다.
 - `--out`을 생략하면 임시 폴더에 PNG를 씁니다. `--json`의 `png`에서 파일 경로를 확인하세요.
 - `--text`는 표 안 글자를 포함해 해당 쪽 전체의 텍스트를 줄 단위로 냅니다. `--region`은 PNG에만 적용됩니다.
-- `--memos`는 문서에 달린 메모를 `--json`의 `memos`에 문서 전체로 내고, 그 쪽 PNG에 메모가 달린 글을 강조하고 번호를 붙입니다. 메모 하나하나의 작성자·날짜·본문과, 메모가 달린 글(`anchorText`)·그 문단(`paragraphText`)·쪽(`page`)이 들어 있습니다. 기준 글과 문단은 앞 2,000자까지입니다(`anchorTextTruncated`가 `true`면 잘린 것). 본문을 다 읽지 못했으면 `textTruncated`가 `true`이고 글 끝에 `(일부 생략)`이 붙습니다.
+- `--memos`는 문서에 달린 메모를 `--json`의 `memos`에 문서 전체로 내고, 그 쪽 PNG에 메모가 달린 글을 강조하고 번호를 붙입니다. 메모 하나하나의 작성자·날짜·본문과, 메모가 달린 글(`anchorText`)·그 문단(`paragraphText`)·쪽(`page`)이 들어 있습니다. 기준 글과 문단은 앞 2,000자까지입니다(`anchorTextTruncated`가 `true`면 잘린 것). 본문을 다 읽지 못했으면 `textTruncated`가 `true`이고 글 끝에 `(일부 생략)`이 붙습니다. `ambiguous`가 `true`면 어느 글에 달린 메모인지 확실하지 않아 `anchorText`가 비어 있습니다.
   - `located`가 `false`면 강조하지 않았다는 뜻입니다. 쪽만 알거나 위치를 확실히 정할 수 없는 메모입니다.
   - 같은 글에 달린 메모를 한 묶음(`memos[].memos`)으로 냅니다. 댓글로 추정한 것이며 파일의 댓글 관계를 읽은 것은 아닙니다.
   - `warnings`에 "메모 N개를 읽지 못함" 같은 문구가 있으면 빠진 메모가 있다는 뜻입니다. 사용자에게 알리세요.

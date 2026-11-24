@@ -367,15 +367,25 @@ test('publicThread says whether the memo text was cut short', () => {
   // shorter than the limit: something else made the range longer
   assert.equal(of({ startCharIdx: 8, endCharIdx: 20 }), false)
   assert.equal(of({ anchorText: cut, multiParagraph: true, endCharIdx: null }), true)
-  // positions that are not certain say nothing about the length
-  assert.equal(of({ anchorText: cut, startCharIdx: 8, endCharIdx: 2008, ambiguous: true }), true)
+  // a text that is not certain is not given at all
+  assert.equal(of({ anchorText: cut, startCharIdx: 8, endCharIdx: 2008, ambiguous: true }), false)
+})
+
+test('publicThread and the shown text leave out a text that is not certain', () => {
+  const [one] = build([entry({ ambiguous: true, anchorText: '다른 글', paragraphText: '문단' })]).threads
+  assert.equal(shownAnchorText(one), '(기준 글을 확실히 알 수 없음)')
+  const shared = publicThread(one)
+  assert.equal(shared.ambiguous, true)
+  assert.equal(shared.anchorText, '')
+  assert.equal(shared.paragraphText, '문단')
+  assert.equal(publicThread(build([entry()]).threads[0]).ambiguous, false)
 })
 
 test('publicThread leaves out the engine position and does not touch the thread', () => {
   const { threads } = build([entry()])
   threads[0].caret = { page: 0, x: 1, y: 2 }
   const shared = publicThread(threads[0])
-  assert.deepEqual(Object.keys(shared), ['number', 'page', 'place', 'anchorText', 'paragraphText', 'multiParagraph', 'located', 'anchorTextTruncated', 'memos'])
+  assert.deepEqual(Object.keys(shared), ['number', 'page', 'place', 'anchorText', 'paragraphText', 'multiParagraph', 'located', 'ambiguous', 'anchorTextTruncated', 'memos'])
   shared.memos[0].text = '바뀜'
   assert.equal(threads[0].memos[0].text, '본문')
   assert.ok(threads[0].anchor)

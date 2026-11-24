@@ -582,8 +582,9 @@ test('a damaged section is a problem; the memos of the others, and what was read
     { code: 'missing-memo', count: 1 },
     { code: 'section-unreadable', count: 1, sectionIndex: 1 }
   ]
-  const incomplete = [{ code: 'bad-record', count: 1 }]
-  /** @type {[string, typeof incomplete, (string | null)[]][]} */
+  // Read to where the file is cut: the rest of the section is not known to be complete.
+  const incomplete = [{ code: 'section-unreadable', count: 1, sectionIndex: 1 }]
+  /** @type {[string, { code: string, count: number, sectionIndex?: number }[], (string | null)[]][]} */
   const damaged = [
     [section.replace('</hp:p>', '</hp:q>'), unreadable, ['메모 1', '메모 3']],
     [section.slice(0, -20), unreadable, ['메모 1', '메모 3']], // ends inside a tag
@@ -595,7 +596,8 @@ test('a damaged section is a problem; the memos of the others, and what was read
   for (const [xml, expected, bodies] of damaged) {
     const { threads, problems } = await open(hwpxFromText({ ...parts, [name]: xml }))
     assert.deepEqual(threads.map(({ memos: [memo] }) => memo.text), bodies)
-    assert.deepEqual(problems.map(({ number, ...rest }) => rest), expected)
+    const byCode = (/** @type {{ code: string }} */ x, /** @type {{ code: string }} */ y) => x.code.localeCompare(y.code)
+    assert.deepEqual(problems.map(({ number, ...rest }) => rest).sort(byCode), [...expected].sort(byCode))
   }
 })
 

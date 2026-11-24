@@ -207,6 +207,13 @@ test('a first character on another page than the caret is a repeated heading row
   assert.deepEqual(memoMarks([thread({ caret: { page: 2, x: null, y: null } })], [run()], 1), [])
 })
 
+test('a memo whose range is not certain is not marked', () => {
+  assert.equal(memoMarks([thread({ ambiguous: false })], [run()]).length, 1)
+  assert.deepEqual(memoMarks([thread({ ambiguous: true })], [run()]), [])
+  const empty = thread({ ambiguous: true, anchorText: '', anchor: { startCharIdx: 8, endCharIdx: 8 } })
+  assert.deepEqual(memoMarks([empty], [run()]), [])
+})
+
 test('without a caret nothing is marked', () => {
   assert.deepEqual(memoMarks([thread({ caret: null })], [run()]), [])
 })

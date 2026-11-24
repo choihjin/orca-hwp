@@ -310,7 +310,7 @@ export function markThread(thread, runs, pageIndex) {
   const finds = copies.flatMap((pieces) => findIn(thread, pieces, start, end, inlineBefore) ?? [])
   const same = finds.filter((find) => isMemoText(find, wanted))
   const hasStart = same.length > 0
-  if (!hasStart || !caret || pageIndex !== caret.page) return { hasStart, mark: null }
+  if (!hasStart || !caret || pageIndex !== caret.page || thread.ambiguous) return { hasStart, mark: null }
   // Text boxes of one drawing object share a path, and the caret is at one of them for all.
   if (thread.place === 'textBox' && anyMeet(copies, sharePlace)) return { hasStart, mark: null }
 

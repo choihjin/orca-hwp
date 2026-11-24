@@ -6,7 +6,8 @@ import {
   problemText,
   publicThread,
   shortDate,
-  shownAnchorText
+  shownAnchorText,
+  shownMemoText
 } from './memo-threads.js'
 
 /** One entry of the engine's getMemos() JSON, as the 0.8.7-p2 contract describes it. */
@@ -89,7 +90,8 @@ test('a thread carries its anchor and has no page until it is located', () => {
     anchorText: '예산',
     paragraphText: '셋째 문단의 "예산" 낱말',
     multiParagraph: false,
-    memos: [{ author: '검토자 가', date: '2026-11-20T08:24:04Z', dateText: null, text: '본문' }],
+    memos: [{ author: '검토자 가', date: '2026-11-20T08:24:04Z', dateText: null, text: '본문', textTruncated: false }],
+    ambiguous: false,
     anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산', start: 0, inlineBefore: 0 },
     caret: null
   })
@@ -321,11 +323,59 @@ test('fullDate is the local date and minute', () => {
   })
 })
 
+test('a memo whose range is not certain says so and shares a thread with no other', () => {
+  const { threads } = build([
+    entry({ number: 1 }),
+    entry({ number: 2, ambiguous: true }),
+    entry({ number: 3, ambiguous: true }),
+    entry({ number: 4, ambiguous: false })
+  ])
+  assert.deepEqual(threads.map((one) => [one.ambiguous, one.memos.length]), [[false, 2], [true, 1], [true, 1]])
+  assert.throws(() => build([entry({ ambiguous: 'yes' })]), (error) => error instanceof Error)
+})
+
+test('a body the engine could not read to its end is marked as such for people and agents', () => {
+  const { threads } = build([entry({ textTruncated: true }), entry({ number: 2 })])
+  assert.deepEqual(publicThread(threads[0]).memos.map((memo) => memo.textTruncated), [true, false])
+  assert.throws(() => build([entry({ textTruncated: 1 })]), (error) => error instanceof Error)
+  assert.equal(shownMemoText({ text: '앞부분', textTruncated: true }), '앞부분 (일부 생략)')
+  assert.equal(shownMemoText({ text: '둘\n줄', textTruncated: true }), '둘\n줄 (일부 생략)')
+  for (const text of [null, '', ' \n']) assert.equal(shownMemoText({ text, textTruncated: true }), '(일부 생략)')
+  assert.equal(shownMemoText({ text: '본문', textTruncated: false }), '본문')
+  assert.equal(shownMemoText({ text: '본문' }), '본문')
+  for (const text of [null, '']) assert.equal(shownMemoText({ text, textTruncated: false }), '')
+})
+
+test('fields of a later engine are ignored', () => {
+  const plain = build([entry()], [{ code: 'bad-record', count: 1 }])
+  const later = buildMemoReport(
+    JSON.stringify({
+      memos: [entry({ future: { a: 1 }, ambiguousness: 'x' })],
+      problems: [{ code: 'bad-record', count: 1, future: [1] }],
+      future: null
+    })
+  )
+  assert.deepEqual(later, plain)
+})
+
+test('publicThread says whether the memo text was cut short', () => {
+  const of = (/** @type {object} */ over) => publicThread(build([entry(over)]).threads[0]).anchorTextTruncated
+  const cut = '가'.repeat(2000)
+  assert.equal(of({}), false)
+  assert.equal(of({ anchorText: cut, startCharIdx: 8, endCharIdx: 2108 }), true)
+  assert.equal(of({ anchorText: cut, startCharIdx: 8, endCharIdx: 2008 }), false)
+  // shorter than the limit: something else made the range longer
+  assert.equal(of({ startCharIdx: 8, endCharIdx: 20 }), false)
+  assert.equal(of({ anchorText: cut, multiParagraph: true, endCharIdx: null }), true)
+  // positions that are not certain say nothing about the length
+  assert.equal(of({ anchorText: cut, startCharIdx: 8, endCharIdx: 2008, ambiguous: true }), true)
+})
+
 test('publicThread leaves out the engine position and does not touch the thread', () => {
   const { threads } = build([entry()])
   threads[0].caret = { page: 0, x: 1, y: 2 }
   const shared = publicThread(threads[0])
-  assert.deepEqual(Object.keys(shared), ['number', 'page', 'place', 'anchorText', 'paragraphText', 'multiParagraph', 'located', 'memos'])
+  assert.deepEqual(Object.keys(shared), ['number', 'page', 'place', 'anchorText', 'paragraphText', 'multiParagraph', 'located', 'anchorTextTruncated', 'memos'])
   shared.memos[0].text = '바뀜'
   assert.equal(threads[0].memos[0].text, '본문')
   assert.ok(threads[0].anchor)

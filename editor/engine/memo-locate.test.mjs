@@ -268,3 +268,10 @@ test('after inline objects a page is not corrected to one that has no caret to c
   assert.deepEqual(locate(fakeDoc(0, [[], there]), behind()), [1, false])
   assert.deepEqual(locate(fakeDoc(1, [[], there]), behind()), [2, true])
 })
+
+test('a memo whose range is not certain gets its page as any other, and is not located', () => {
+  const unsure = () => thread({ ambiguous: true })
+  assert.deepEqual(locate(fakeDoc(1, [[], here, []]), unsure()), [2, false])
+  assert.deepEqual(locate(fakeDoc(1, [[], [], here]), unsure()), [3, false])
+  assert.deepEqual(locate(fakeDoc(null, [here]), unsure()), [null, false])
+})

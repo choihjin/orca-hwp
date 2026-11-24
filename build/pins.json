@@ -302,6 +302,10 @@
         "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86",
         "size": 5093
       }
+    },
+    "wasm": {
+      "sha256": "863f026691f250f24d9c8b4b15284d60bdbee60f3e05010585557b2c5b6a7500",
+      "size": 209111
     }
   }
 }

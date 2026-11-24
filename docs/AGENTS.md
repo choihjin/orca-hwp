@@ -37,7 +37,7 @@ PLUGIN_DIR="$HOME/Library/Application Support/orca/plugins/$PLUGIN_KEY/$CONTENT_
 렌더러는 저장소에 그대로 들어 있습니다. 릴리스 태그를 받아 그 폴더를 `PLUGIN_DIR`로 쓰면 됩니다. 커밋된 WASM이 플러그인과 같은 빌드인지는 `build/pins.json`의 `rhwp.patched` 해시와 비교해 확인할 수 있습니다.
 
 ```sh
-git clone --depth 1 --branch v0.1.2 https://github.com/choihjin/orca-hwp
+git clone --depth 1 --branch v0.1.3 https://github.com/choihjin/orca-hwp
 PLUGIN_DIR="$PWD/orca-hwp"
 ```
 

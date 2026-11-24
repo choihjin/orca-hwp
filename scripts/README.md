@@ -8,8 +8,9 @@ node scripts/acceptance.mjs --verbose   # 맞지 않는 줄을 모두 출력
 
 ## 표본
 
-모두 rhwp 태그 `v0.8.7`(커밋 `1a76570e833917d15817415a53c09ad61ab3203f`)의 `samples/`에서
-`https://raw.githubusercontent.com/edwardkim/rhwp/<커밋>/<경로>`로 받는다. 파일별 경로·크기·sha256은
+`synthetic-*.hwp`를 뺀 나머지는 모두 rhwp 태그 `v0.8.7`(커밋 `1a76570e833917d15817415a53c09ad61ab3203f`)의 `samples/`에서
+`https://raw.githubusercontent.com/edwardkim/rhwp/<커밋>/<경로>`로 받는다. `synthetic-*.hwp`는 파일별 `rawBase`로
+이 저장소의 고정 커밋에서 받는다([testdata/README.md](testdata/README.md)). 파일별 경로·크기·sha256은
 `fixtures.json`의 `files`에 있고, 하나라도 다르면 `fetch-fixtures.mjs`가 종료 코드 1로 끝난다. 이미 받은
 파일이 핀과 같으면 다시 받지 않는다.
 

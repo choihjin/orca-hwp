@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Finds the HWP Viewer renderer (the Orca plugin's agent/agent-view.mjs) and runs it, so an agent
+# Finds the HWP Reader renderer (the Orca plugin's agent/agent-view.mjs) and runs it, so an agent
 # never has to work out the plugin folder itself. Works without Orca too (servers, CI).
 #
 #   hwp-view.sh <file.hwp|file.hwpx> [agent-view options]   # PNG + text of a page (offline)
@@ -53,7 +53,7 @@ plugin_dir() {
   if [ -n "$checkout" ] && has_renderer "$checkout"; then echo "$checkout"; return; fi
   if has_renderer "$CACHE"; then echo "$CACHE"; return; fi
   cat >&2 <<EOF
-HWP Viewer renderer not found: no Orca plugin here (Orca not installed, or a headless runtime
+HWP Reader renderer not found: no Orca plugin here (Orca not installed, or a headless runtime
 without the plugin service), no repository checkout, and nothing in $CACHE.
   - Desktop with Orca: orca plugin install choihjin/orca-hwp
   - Anywhere else:     $0 --fetch      (downloads the newest release tag into the cache)

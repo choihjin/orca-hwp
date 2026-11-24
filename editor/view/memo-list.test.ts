@@ -275,10 +275,18 @@ test('강조하지 못한 묶음은 기준 글을 글로 적고, 찾으면 감�
 test('잘린 기준 글은 …으로 끝난다', () => {
   const { panel, list } = setup()
   const anchor = {
-    sectionIndex: 0, ownerParaIndex: 0, paraIndex: 0, path: null, startCharIdx: 0, endCharIdx: 9, text: '잘린', start: 0
+    sectionIndex: 0, ownerParaIndex: 0, paraIndex: 0, path: null, startCharIdx: 0, endCharIdx: 2100, text: '잘'.repeat(2000), start: 0
   }
-  list.show(report([thread(1, { located: false, anchorText: '잘린', anchor })]), true)
-  assert.equal(item(panel, 1).byClass('memo-anchor')[0].textContent, '잘린…')
+  list.show(report([thread(1, { located: false, anchorText: '잘'.repeat(2000), anchor })]), true)
+  assert.equal(item(panel, 1).byClass('memo-anchor')[0].textContent, `${'잘'.repeat(2000)}…`)
+})
+
+test('본문을 다 읽지 못한 메모는 끝에 (일부 생략)을 붙인다', () => {
+  const { panel, list } = setup()
+  list.show(report([thread(1, { memos: [{ author: '가', date: null, dateText: null, text: '앞부분만', textTruncated: true }] })]), true)
+  assert.deepEqual(item(panel, 1).byClass('memo-text').map((m) => m.textContent), ['앞부분만 (일부 생략)'])
+  list.show(report([thread(1, { memos: [{ author: '가', date: null, dateText: null, text: null, textTruncated: true }] })]), true)
+  assert.deepEqual(item(panel, 1).byClass('memo-text').map((m) => m.textContent), ['(일부 생략)'])
 })
 
 test('작성자가 없으면 (작성자 없음), 본문이 없거나 비면 (내용 없음)', () => {

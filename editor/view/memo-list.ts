@@ -1,6 +1,6 @@
 // The memo list beside the pages, and the status bar button that opens and closes it. Everything
 // that comes from the document is set as text, never as markup.
-import { fullDate, placeLabel, problemText, shortDate, shownAnchorText } from '../engine/memo-threads.js'
+import { fullDate, placeLabel, problemText, shortDate, shownAnchorText, shownMemoText } from '../engine/memo-threads.js'
 import type { Memo, MemoReport, MemoThread } from '../engine/memo-threads.js'
 
 export type MemoList = {
@@ -86,8 +86,8 @@ export function createMemoList(options: {
   }
 
   function text(memo: Memo): HTMLElement {
-    const empty = memo.text === null || memo.text.trim() === ''
-    return element('span', 'memo-text memo-own', empty ? '(내용 없음)' : String(memo.text))
+    const shown = shownMemoText(memo)
+    return element('span', 'memo-text memo-own', shown.trim() === '' ? '(내용 없음)' : shown)
   }
 
   function itemOf(thread: MemoThread): Item {

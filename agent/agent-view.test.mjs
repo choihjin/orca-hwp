@@ -144,8 +144,8 @@ test('memo JSON exposes the whole report and plain output flattens each memo to 
     const page = JSON.parse(result.stdout)
     assert.deepEqual(page.memos, [{
       number: 1, page: 1, place: 'body', anchorText: '예산', paragraphText: '예산',
-      multiParagraph: false, located: true,
-      memos: [{ author: '검토자\n가', date: null, dateText: '11.20', text: '<img onerror=1>\n본문' }]
+      multiParagraph: false, located: true, anchorTextTruncated: false,
+      memos: [{ author: '검토자\n가', date: null, dateText: '11.20', text: '<img onerror=1>\n본문', textTruncated: false }]
     }])
     assert.ok(page.warnings.includes('읽지 못한 메모 기록 1개'))
 
@@ -156,6 +156,18 @@ test('memo JSON exposes the whole report and plain output flattens each memo to 
     assert.deepEqual(plain.stdout.trimEnd().split('\n'), [
       join(dir, 'page.png'), '1 · 1쪽 · 검토자 가 · 11.20 · "예산" → <img onerror=1> 본문'
     ])
+  })
+})
+
+test('plain output says when a memo body was cut short', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const nodeArgs = mockMemoPage(dir, { textTruncated: true })
+    const plain = spawnSync('node', [...nodeArgs, script, sample, '--memos', '--out', 'page.png', '--bundled-fonts-only'], {
+      cwd: dir, encoding: 'utf8', timeout: 30000
+    })
+    assert.equal(plain.status, 0, plain.stderr)
+    assert.ok(plain.stdout.includes('본문 (일부 생략)'), plain.stdout)
   })
 })
 
@@ -205,14 +217,14 @@ test('plain memo output strips terminal controls and indicates a truncated ancho
   withOutputDir((dir) => {
     const nodeArgs = mockMemoPage(dir, {
       author: '검\u0085토\u200E자', text: '본문\t\u009b\u009f\u200f\u202e\u2069\n계속',
-      dateText: '11\u2066.20', endCharIdx: 100
+      dateText: '11\u2066.20', anchorText: '예'.repeat(2000), endCharIdx: 2100
     })
     const plain = spawnSync('node', [...nodeArgs, script, sample, '--memos', '--out', 'page.png', '--bundled-fonts-only'], {
       cwd: dir, encoding: 'utf8', timeout: 30000
     })
     assert.equal(plain.status, 0, plain.stderr)
     assert.deepEqual(plain.stdout.trimEnd().split('\n'), [
-      join(dir, 'page.png'), '1 · 1쪽 · 검토자 · 11.20 · "예산…" → 본문 계속'
+      join(dir, 'page.png'), '1 · 1쪽 · 검토자 · 11.20 · "' + '예'.repeat(2000) + '…" → 본문 계속'
     ])
   })
 })

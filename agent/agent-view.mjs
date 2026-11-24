@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { locateThreads } from '../editor/engine/memo-locate.js'
 import { memoMarks } from '../editor/engine/memo-marks.js'
-import { fullDate, problemText, publicThread, shownAnchorText } from '../editor/engine/memo-threads.js'
+import { fullDate, problemText, publicThread, shownAnchorText, shownMemoText } from '../editor/engine/memo-threads.js'
 import { ENGINE_INFO, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { cropPng } from './crop-png.mjs'
@@ -302,7 +302,7 @@ function printMemos(threads) {
     const anchorText = shownAnchorText(thread)
     const location = page === null ? '위치 미상' : `${page}쪽`
     for (const memo of memos) {
-      const line = `${number} · ${location} · ${memo.author} · ${fullDate(memo)} · "${anchorText}" → ${memo.text ?? ''}`
+      const line = `${number} · ${location} · ${memo.author} · ${fullDate(memo)} · "${anchorText}" → ${shownMemoText(memo)}`
       console.log(singleLine(line))
     }
   }

@@ -1,0 +1,328 @@
+// The engine's getMemos() JSON as threads: memos on exactly the same text, in number order. The
+// grouping is a guess from that shared text, not a reply relation read from the file. Shared by the
+// frame and Node (agent/agent-view.mjs), so it is plain ESM with JSDoc types; no DOM, no engine.
+
+/**
+ * @typedef {'body' | 'tableCell' | 'textBox' | 'caption' | 'header' | 'footer' | 'footnote'
+ *   | 'endnote' | 'masterPage' | 'unlinked'} MemoPlace
+ */
+
+/** @typedef {{ controlIndex: number, cellIndex: number, cellParaIndex: number }} CellStep */
+
+/**
+ * `date` is UTC (`YYYY-MM-DDTHH:MM:SSZ`); `dateText` is the file's own text, only when there is no
+ * `date`. `text` is null when the file has no body for the memo.
+ * @typedef {{ author: string, date: string | null, dateText: string | null, text: string | null }} Memo
+ */
+
+/**
+ * Where the memo's text is. `ownerParaIndex` is the paragraph directly in the section; `path` leads
+ * from it into table cells and text boxes. Character positions count code points. All but the first
+ * two are null outside body text, table cells and text boxes.
+ * @typedef {{
+ *   sectionIndex: number,
+ *   ownerParaIndex: number,
+ *   paraIndex: number | null,
+ *   path: CellStep[] | null,
+ *   startCharIdx: number | null,
+ *   endCharIdx: number | null
+ * }} MemoAnchor
+ */
+
+/**
+ * `number` and `page` count from 1; `page` is null when unknown. `located` says the highlight was
+ * found on that page (memo-locate.js).
+ * @typedef {{
+ *   number: number,
+ *   page: number | null,
+ *   located: boolean,
+ *   place: MemoPlace,
+ *   anchorText: string,
+ *   paragraphText: string,
+ *   multiParagraph: boolean,
+ *   memos: Memo[],
+ *   anchor: MemoAnchor | null
+ * }} MemoThread
+ */
+
+/** @typedef {{ code: string, number?: number, sectionIndex?: number }} MemoProblem */
+
+/** @typedef {{ threads: MemoThread[], problems: MemoProblem[] }} MemoReport */
+
+/** @type {Record<MemoPlace, string>} */
+const PLACE_LABELS = {
+  body: '',
+  tableCell: '표 칸',
+  textBox: '글상자',
+  caption: '캡션',
+  header: '머리말',
+  footer: '꼬리말',
+  footnote: '각주',
+  endnote: '미주',
+  masterPage: '바탕쪽',
+  unlinked: '글과 연결되지 않음'
+}
+
+/**
+ * Removes C0 controls (but not line feed and tab) and DEL.
+ * @param {string} text
+ */
+function clean(text) {
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} what
+ * @returns {Record<string, unknown>}
+ */
+function object(value, what) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`memo JSON: ${what} is not an object`)
+  }
+  return /** @type {Record<string, unknown>} */ (value)
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {unknown[]}
+ */
+function list(source, key) {
+  const value = source[key]
+  if (!Array.isArray(value)) throw new Error(`memo JSON: ${key} is not a list`)
+  return value
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {string}
+ */
+function string(source, key) {
+  const value = source[key]
+  if (typeof value !== 'string') throw new Error(`memo JSON: ${key} is not a string`)
+  return value
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {string | null}
+ */
+function stringOrNull(source, key) {
+  return source[key] === null ? null : string(source, key)
+}
+
+/**
+ * A count or an index: rhwp gives unsigned integers.
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {number}
+ */
+function index(source, key) {
+  const value = source[key]
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`memo JSON: ${key} is not an index`)
+  }
+  return value
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {number | null}
+ */
+function indexOrNull(source, key) {
+  return source[key] === null ? null : index(source, key)
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @returns {CellStep[] | null}
+ */
+function cellPath(source) {
+  if (source.path === null) return null
+  return list(source, 'path').map((value) => {
+    const step = object(value, 'path step')
+    return {
+      controlIndex: index(step, 'controlIndex'),
+      cellIndex: index(step, 'cellIndex'),
+      cellParaIndex: index(step, 'cellParaIndex')
+    }
+  })
+}
+
+/**
+ * @param {unknown} value
+ * @returns {{ order: number, key: string | null, thread: MemoThread, memo: Memo }} `key` is null
+ *   for a memo that never shares a thread
+ */
+function readEntry(value) {
+  const source = object(value, 'memo')
+  const place = string(source, 'place')
+  if (!Object.hasOwn(PLACE_LABELS, place)) throw new Error(`memo JSON: unknown place ${place}`)
+  if (typeof source.multiParagraph !== 'boolean') throw new Error('memo JSON: multiParagraph is not a boolean')
+  const anchorKey = place === 'unlinked' ? null : string(source, 'anchorKey')
+  const sectionIndex = indexOrNull(source, 'sectionIndex')
+  const ownerParaIndex = indexOrNull(source, 'ownerParaIndex')
+  const spot = {
+    paraIndex: indexOrNull(source, 'paraIndex'),
+    path: cellPath(source),
+    startCharIdx: indexOrNull(source, 'startCharIdx'),
+    endCharIdx: indexOrNull(source, 'endCharIdx')
+  }
+  const dateText = stringOrNull(source, 'dateText')
+  const text = stringOrNull(source, 'text')
+  return {
+    order: index(source, 'number'),
+    // Over several paragraphs "the same text" needs the same end too.
+    key: source.multiParagraph && spot.endCharIdx === null ? null : anchorKey,
+    memo: {
+      author: clean(string(source, 'author')),
+      date: stringOrNull(source, 'date'),
+      dateText: dateText === null ? null : clean(dateText),
+      text: text === null ? null : clean(text)
+    },
+    thread: {
+      number: 0,
+      page: null,
+      located: false,
+      place: /** @type {MemoPlace} */ (place),
+      anchorText: clean(string(source, 'anchorText')),
+      paragraphText: clean(string(source, 'paragraphText')),
+      multiParagraph: source.multiParagraph,
+      memos: [],
+      anchor: sectionIndex === null || ownerParaIndex === null ? null : { sectionIndex, ownerParaIndex, ...spot }
+    }
+  }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {MemoProblem}
+ */
+function readProblem(value) {
+  const source = object(value, 'problem')
+  /** @type {MemoProblem} */
+  const problem = { code: string(source, 'code') }
+  if (source.number !== undefined) problem.number = index(source, 'number')
+  if (source.sectionIndex !== undefined) problem.sectionIndex = index(source, 'sectionIndex')
+  return problem
+}
+
+/**
+ * @param {string} json the engine's getMemos() result
+ * @returns {MemoReport}
+ * @throws {Error} when the JSON has another shape: a memo must never go missing without a word
+ */
+export function buildMemoReport(json) {
+  const source = object(JSON.parse(json), 'result')
+  const problems = list(source, 'problems').map(readProblem)
+  /** @type {{ thread: MemoThread, entries: { order: number, memo: Memo }[] }[]} */
+  const groups = []
+  /** @type {Map<string, (typeof groups)[number]>} */
+  const byKey = new Map()
+  for (const value of list(source, 'memos')) {
+    const { order, key, thread, memo } = readEntry(value)
+    let group = key === null ? undefined : byKey.get(key)
+    if (!group) {
+      group = { thread, entries: [] }
+      groups.push(group)
+      if (key !== null) byKey.set(key, group)
+    }
+    group.entries.push({ order, memo })
+  }
+  const linked = groups.filter((group) => group.thread.place !== 'unlinked')
+  const unlinked = groups.filter((group) => group.thread.place === 'unlinked')
+  const threads = [...linked, ...unlinked].map(({ thread, entries }, at) => ({
+    ...thread,
+    number: at + 1,
+    memos: entries.sort((a, b) => a.order - b.order).map((entry) => entry.memo)
+  }))
+  return { threads, problems }
+}
+
+/** @param {number} value */
+const two = (value) => String(value).padStart(2, '0')
+
+/**
+ * @param {Pick<Memo, 'date'>} memo
+ * @returns {Date | null}
+ */
+function dateOf(memo) {
+  const date = memo.date === null ? null : new Date(memo.date)
+  return date && !Number.isNaN(date.getTime()) ? date : null
+}
+
+/**
+ * `11.20`, or `2025.11.20` in another year, in local time; the file's own text when there is no date.
+ * @param {Pick<Memo, 'date' | 'dateText'>} memo
+ * @param {Date} now
+ * @returns {string}
+ */
+export function shortDate(memo, now) {
+  const date = dateOf(memo)
+  if (!date) return memo.dateText ?? ''
+  const day = `${two(date.getMonth() + 1)}.${two(date.getDate())}`
+  return date.getFullYear() === now.getFullYear() ? day : `${date.getFullYear()}.${day}`
+}
+
+/**
+ * `2026-11-20 17:24` in local time; the file's own text when there is no date.
+ * @param {Pick<Memo, 'date' | 'dateText'>} memo
+ * @returns {string}
+ */
+export function fullDate(memo) {
+  const date = dateOf(memo)
+  if (!date) return memo.dateText ?? ''
+  const day = `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`
+  return `${day} ${two(date.getHours())}:${two(date.getMinutes())}`
+}
+
+/**
+ * The thread as agents get it: a copy without the engine position.
+ * @param {MemoThread} thread
+ * @returns {Omit<MemoThread, 'anchor'>}
+ */
+export function publicThread(thread) {
+  return {
+    number: thread.number,
+    page: thread.page,
+    place: thread.place,
+    anchorText: thread.anchorText,
+    paragraphText: thread.paragraphText,
+    multiParagraph: thread.multiParagraph,
+    located: thread.located,
+    memos: thread.memos.map((memo) => ({ ...memo }))
+  }
+}
+
+/**
+ * @param {MemoProblem} problem
+ * @returns {string}
+ */
+export function problemText(problem) {
+  switch (problem.code) {
+    case 'no-body':
+      return `파일 안 번호 ${problem.number ?? '?'} 메모의 본문을 찾지 못함`
+    case 'unlinked-body':
+      return `파일 안 번호 ${problem.number ?? '?'} 메모가 글과 연결되지 않음`
+    case 'bad-record':
+      return '읽지 못한 메모 기록이 있음'
+    case 'section-unreadable':
+      return problem.sectionIndex === undefined
+        ? '읽지 못한 구역이 있어 메모가 빠졌을 수 있음'
+        : `${problem.sectionIndex + 1}구역을 읽지 못해 메모가 빠졌을 수 있음`
+    default:
+      return '일부 메모를 읽지 못함'
+  }
+}
+
+/**
+ * @param {MemoPlace} place
+ * @returns {string} empty for body text
+ */
+export function placeLabel(place) {
+  return PLACE_LABELS[place]
+}

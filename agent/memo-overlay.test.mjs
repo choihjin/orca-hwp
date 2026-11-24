@@ -58,6 +58,14 @@ test('memo badges move into whitespace when the previous line crosses their anch
   assert.ok(box.x + box.w <= 10 || box.x >= 84 || box.y >= 17)
 })
 
+test('a memo badge that does not fit above stays in the row of its own line', () => {
+  const previousLine = { x: 10, y: 4, w: 60, h: 12 }
+  const ownLine = { x: 10, y: 20, w: 50, h: 12 }
+  const [box] = badgeBoxes(memoOverlay([mark], page, undefined, [previousLine, ownLine]))
+  assert.ok(box.x >= 60)
+  assert.equal(box.y + box.h / 2, 26)
+})
+
 test('memo badges stay inside the crop when only the highlight intersects it', () => {
   const crop = { x: 15, y: 4, width: 20, height: 22 }
   const [box] = badgeBoxes(memoOverlay([mark], page, crop))

@@ -37,13 +37,19 @@ function badgeInRow({ x, y, w, h }, viewport, obstacles) {
   return next >= left ? { x: next, y, w, h } : null
 }
 
-function placeBadge(anchor, w, h, viewport, occupied, text, cropped) {
+/**
+ * Above the end of the highlight, else in the row of its own line. Never further along the row
+ * above: there the number would read as belonging to the previous line.
+ */
+function placeBadge(anchor, lineHeight, w, h, viewport, occupied, text, cropped) {
   const top = viewport.y
   const bottom = viewport.y + viewport.h - h
   const y = clamp(anchor.y - h - 2, top, bottom)
   const box = { x: anchor.x, y, w, h }
   const obstacles = [...text, ...occupied]
-  const beside = badgeInRow(box, viewport, obstacles)
+  const above = badgeInRow(box, viewport, occupied)
+  if (above && !text.some((t) => visible(t, above))) return above
+  const beside = badgeInRow({ ...box, y: clamp(anchor.y + (lineHeight - h) / 2, top, bottom) }, viewport, obstacles)
   if (beside) return beside
   const margins = [top, bottom].sort((a, b) => Math.abs(a - y) - Math.abs(b - y))
   for (const margin of margins) {
@@ -86,7 +92,8 @@ export function memoOverlay(marks, pageSize, region, textRuns = []) {
     )) continue
     const baseWidth = Math.max(13, String(number).length * 6 + 5)
     const scale = Math.min(1, viewport.w / baseWidth, viewport.h / 11)
-    const placed = placeBadge(badge, baseWidth * scale, 11 * scale, viewport, occupied, text, Boolean(region))
+    const lineHeight = boxes.at(-1)?.h ?? 11
+    const placed = placeBadge(badge, lineHeight, baseWidth * scale, 11 * scale, viewport, occupied, text, Boolean(region))
     if (!placed || !visible(placed, viewport)) continue
     const { x, y, w, h } = placed
     occupied.push(placed)

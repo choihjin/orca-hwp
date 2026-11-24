@@ -68,24 +68,58 @@ test('--memos on a memo-free public sample adds only an empty list', () => {
 test('a memo read failure leaves the PNG available and warns', () => {
   if (!existsSync(sample)) return
   withOutputDir((dir) => {
-    const nodeArgs = mockGetMemos(dir, 'throw new Error("memo read failed")')
+    const reason = 'memo read failed ' + 'x'.repeat(200)
+    const nodeArgs = mockGetMemos(dir, 'throw new Error(' + JSON.stringify(reason) + ')')
     const result = run([sample, '--memos', '--out', 'page.png'], dir, nodeArgs)
     assert.equal(result.status, 0, result.stderr || result.stdout)
     const page = JSON.parse(result.stdout)
     assert.ok(!Object.hasOwn(page, 'memos'))
-    assert.ok(page.warnings.includes('메모를 읽지 못함'))
+    assert.ok(page.warnings.includes('메모를 읽지 못함: ' + reason.slice(0, 200)))
     assert.ok(existsSync(page.png))
   })
 })
 
-function mockMemoPage(dir) {
+test('a memo WASM trap preserves PNG and text, and only then tolerates a free failure', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const args = [sample, '--text', '--out', 'page.png']
+    const baseline = run(args, dir)
+    assert.equal(baseline.status, 0, baseline.stderr || baseline.stdout)
+    const page = JSON.parse(baseline.stdout)
+    const png = readFileSync(page.png)
+    const nodeArgs = mockGetMemos(dir, 'this.trapped = true; throw new WebAssembly.RuntimeError("unreachable")')
+    const preload = nodeArgs[1]
+    writeFileSync(preload, readFileSync(preload, 'utf8') + '\n' + [
+      'const { free, renderPageSvg, getPageTextLayout } = HwpDocument.prototype',
+      'for (const [method, original] of Object.entries({ renderPageSvg, getPageTextLayout })) {',
+      '  HwpDocument.prototype[method] = function (...args) {',
+      '    if (this.trapped) throw new Error("still borrowed")',
+      '    return original.apply(this, args)',
+      '  }',
+      '}',
+      'HwpDocument.prototype.free = function () {',
+      '  free.call(this)',
+      '  throw new Error("free failed")',
+      '}'
+    ].join('\n'))
+    const result = run([...args, '--memos'], dir, nodeArgs)
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.deepEqual(JSON.parse(result.stdout), { ...page, warnings: [...page.warnings, '메모를 읽지 못함: unreachable'] })
+    assert.deepEqual(readFileSync(page.png), png)
+    const noMemos = run(args, dir, nodeArgs)
+    assertError(noMemos, 'render-failed')
+    assert.equal(JSON.parse(noMemos.stdout).error.message, 'free failed')
+  })
+})
+
+function mockMemoPage(dir, entry = {}) {
   const preload = join(dir, 'memo-page.mjs')
   const rhwp = new URL('../editor/vendor/rhwp/rhwp.js', import.meta.url)
   const memos = [{
     number: 1, author: '검토자\u0000\n가', text: '<img onerror=1>\n본문',
     date: null, dateText: '11.20', place: 'body', anchorText: '예산', paragraphText: '예산',
     multiParagraph: false, anchorKey: 'memo', sectionIndex: 0, ownerParaIndex: 0,
-    paraIndex: 0, path: null, startCharIdx: 0, endCharIdx: 2
+    paraIndex: 0, path: null, startCharIdx: 0, endCharIdx: 2, ...entry
   }]
   writeFileSync(preload, `
     import { HwpDocument } from ${JSON.stringify(rhwp.href)}
@@ -151,6 +185,23 @@ test('memo highlights survive a region edge and padding and leave disjoint regio
         assert.deepEqual(pixel(35, 8), [255, 255, 255, 255], 'right padding stays white')
       }
     }
+  })
+})
+
+test('plain memo output strips terminal controls and indicates a truncated anchor', () => {
+  if (!existsSync(sample)) return
+  withOutputDir((dir) => {
+    const nodeArgs = mockMemoPage(dir, {
+      author: '검\u0085토\u200E자', text: '본문\t\u009b\u009f\u200f\u202e\u2069\n계속',
+      dateText: '11\u2066.20', endCharIdx: 100
+    })
+    const plain = spawnSync('node', [...nodeArgs, script, sample, '--memos', '--out', 'page.png', '--bundled-fonts-only'], {
+      cwd: dir, encoding: 'utf8', timeout: 30000
+    })
+    assert.equal(plain.status, 0, plain.stderr)
+    assert.deepEqual(plain.stdout.trimEnd().split('\n'), [
+      join(dir, 'page.png'), '1 · 1쪽 · 검토자 · 11.20 · "예산…" → 본문 계속'
+    ])
   })
 })
 

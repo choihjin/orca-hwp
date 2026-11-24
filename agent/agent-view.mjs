@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { locateThreads } from '../editor/engine/memo-locate.js'
 import { memoMarks } from '../editor/engine/memo-marks.js'
-import { fullDate, problemText, publicThread } from '../editor/engine/memo-threads.js'
+import { fullDate, problemText, publicThread, shownAnchorText } from '../editor/engine/memo-threads.js'
 import { ENGINE_INFO, initEngine, openDocument } from '../editor/engine/rhwp-adapter.js'
 import { sanitizeSvg } from '../editor/render/sanitize.js'
 import { cropPng } from './crop-png.mjs'
@@ -217,18 +217,20 @@ async function renderPng(svg, fontBuffers, pad) {
   }
 }
 
-function readPageMemos(doc, index, pageSize, region, warnings) {
+function readPageMemos(doc, index, pageSize, region, warnings, textRuns) {
   try {
     const { threads, problems } = doc.memos()
     for (const problem of problems) warnings.push(problemText(problem))
     locateThreads(doc, threads, { verify: true })
     const selected = threads.filter((thread) => thread.page === index + 1 && thread.located)
     const overlay = selected.length
-      ? memoOverlay(memoMarks(selected, doc.pageAnchorRuns(index), index), pageSize, region)
+      ? memoOverlay(memoMarks(selected, doc.pageAnchorRuns(index), index), pageSize, region,
+        (textRuns ?? doc.pageTextRuns(index)).filter(({ text }) => text.trim() !== ''))
       : ''
-    return { memos: threads.map(publicThread), overlay }
-  } catch {
-    warnings.push('메모를 읽지 못함')
+    return { threads, overlay }
+  } catch (error) {
+    const reason = singleLine(error instanceof Error ? error.message : String(error))
+    warnings.push(`메모를 읽지 못함: ${Array.from(reason).slice(0, 200).join('')}`)
     return { overlay: '' }
   }
 }
@@ -239,6 +241,7 @@ async function renderPage(options) {
   const { bytes, stat } = readInput(file, outputPath)
   await initEngine(readFileSync(engineWasm))
   const doc = openDocument(bytes)
+  let memoReadFailed = false
   try {
     if (page < 1 || page > doc.pageCount) {
       throw new CliError('page-out-of-range', `Page ${page} is outside the document (${doc.pageCount} pages)`)
@@ -251,31 +254,45 @@ async function renderPage(options) {
     const dimensions = scaledDimensions(region ?? pageSize, scale)
     const result = sanitizeSvg(doc.renderPageSvg(index), `p${index}-`)
     const warnings = [...result.warnings]
-    const { memos, overlay } = options.memos
-      ? readPageMemos(doc, index, pageSize, region, warnings)
+    // A memo trap can leave the document borrowed. Save requested text before reading memos.
+    const textRuns = options.memos && options.text ? doc.pageTextRuns(index) : undefined
+    const { threads, overlay } = options.memos
+      ? readPageMemos(doc, index, pageSize, region, warnings, textRuns)
       : { overlay: '' }
+    memoReadFailed = options.memos && threads === undefined
     const end = overlay ? result.svg.lastIndexOf('</svg>') : -1
     const svg = end < 0 ? result.svg : result.svg.slice(0, end) + overlay + result.svg.slice(end)
     const viewport = region
       ? prepareRegion(svg, region, pageSize, dimensions)
       : { svg: prepareSvg(svg, dimensions) }
     const fonts = await prepareFonts(viewport.svg, bundledFontsOnly, warnings, result.fontFaces)
-    const text = options.text ? textLines(doc.pageTextRuns(index)) : undefined
+    const text = options.text ? textLines(textRuns ?? doc.pageTextRuns(index)) : undefined
     const pngBytes = await renderPng(fonts.svg, fonts.fontBuffers, viewport.pad)
     const png = outputPath ?? join(mkdtempSync(join(tmpdir(), 'hwp-agent-view-')), `page-${page}.png`)
     writePng(png, pngBytes, stat)
-    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings, memos }
+    return { file, pageCount: doc.pageCount, page, pageSize, png, text, engine: ENGINE_INFO, warnings, threads }
   } finally {
-    doc.dispose()
+    try {
+      doc.dispose()
+    } catch (error) {
+      if (!memoReadFailed) throw error
+    }
   }
 }
 
+function singleLine(text) {
+  return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[\n\u2028\u2029]+/g, ' ')
+}
+
 function printMemos(threads) {
-  for (const { number, page, anchorText, memos } of threads) {
+  for (const thread of threads) {
+    const { number, page, memos } = thread
+    const anchorText = shownAnchorText(thread)
     const location = page === null ? '위치 미상' : `${page}쪽`
     for (const memo of memos) {
       const line = `${number} · ${location} · ${memo.author} · ${fullDate(memo)} · "${anchorText}" → ${memo.text ?? ''}`
-      console.log(line.replace(/[\r\n\u2028\u2029]+/g, ' '))
+      console.log(singleLine(line))
     }
   }
 }
@@ -288,12 +305,12 @@ try {
     console.log(usage)
   } else {
     json = options.json
-    const result = await renderPage(options)
+    const { threads, ...result } = await renderPage(options)
     if (json) {
-      console.log(JSON.stringify(result))
+      console.log(JSON.stringify({ ...result, memos: threads?.map(publicThread) }))
     } else {
       console.log(result.png)
-      printMemos(result.memos ?? [])
+      printMemos(threads ?? [])
       for (const line of result.text ?? []) console.log(line)
       for (const warning of result.warnings) console.error(warning)
     }

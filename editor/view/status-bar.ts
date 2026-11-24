@@ -1,4 +1,4 @@
-// The one-line status bar: `HWP · 3/35쪽 · 100% · rhwp 0.8.7-p1`, plus pages that failed
+// The one-line status bar: `HWP · 3/35쪽 · 100% · rhwp 0.8.7-p2`, plus pages that failed
 // to render and memos that could not be read.
 
 export type StatusState = {

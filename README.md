@@ -8,9 +8,10 @@ A read-only, page-by-page viewer for Hangul word processor documents (`.hwpx`, `
 
 ## Status (0.1.4, 2026-11-24)
 
-- Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine plus a pagination patch (our own build, `0.8.7-p1`; it fixes a page per table when one paragraph holds many inline tables and text boxes, see the [decision record](docs/decisions/2026-11-20-rhwp-tac-pagination-patch.md), Korean), including tables, images, headers and footers, and mixed portrait and landscape pages.
+- Renders `.hwp` (HWP 5.x) and `.hwpx` page by page with the [rhwp](https://github.com/edwardkim/rhwp) 0.8.7 engine plus a pagination patch and a memo reader (our own build, `0.8.7-p2`; it fixes a page per table when one paragraph holds many inline tables and text boxes, see the [decision record](docs/decisions/2026-11-20-rhwp-tac-pagination-patch.md), Korean), including tables, images, headers and footers, and mixed portrait and landscape pages.
 - Draws the visible pages first and the rest as you scroll, so the first page of a document with hundreds of pages appears right away.
 - Remembers the last page and zoom for each document.
+- Lists the memos (comments) of a document next to its pages and highlights the text each memo is on. If some memos could not be read, it says how many. Memos cannot be added or changed.
 - Works offline and asks for no plugin capabilities. It ships 13 open (OFL) fonts for Korean text and prefers the document's original fonts, such as HCR Batang, when they are installed.
 - Shows a message for damaged files, files that are not Hangul documents, password-protected documents and empty documents. Password-protected documents are not opened.
 
@@ -18,6 +19,7 @@ Limits:
 
 - Pages are drawn by rhwp and can differ from Hancom Office. Line and page breaks differed in a document with complex tables that cross pages ([decision record](docs/decisions/2026-11-19-phase2-integration.md), Korean).
 - No editing, saving, printing or in-document search yet.
+- Not yet checked with memo documents made by Hancom Office. Replies are not read from the file: memos on the same text are shown as one thread.
 - Orca desktop app only. Browser clients (`orca serve`) cannot open it.
 
 ## Screenshots
@@ -47,7 +49,7 @@ All images use public sample documents (`assets/src/`).
 
 ## Install
 
-It is not in an Orca catalog yet. Install it from GitHub:
+It is in the Orca community catalog: install it from Settings → Plugins in Orca, or from GitHub:
 
 ```sh
 orca plugin install choihjin/orca-hwp
@@ -65,6 +67,7 @@ Opening a `.hwp` or `.hwpx` file in Orca opens the viewer.
 | `Home` / `End` | First / last page |
 | Type a number, then `Enter` | Go to that page |
 | `+` / `-` / `0` | Zoom in / out / fit page width |
+| `m` | Open / close the memo list (documents with memos) |
 
 The status bar at the top shows the format, current page, zoom and engine version. Its ⓘ button shows the notices and licenses.
 

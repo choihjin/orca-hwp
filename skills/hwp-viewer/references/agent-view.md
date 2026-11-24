@@ -12,6 +12,7 @@
 | `--scale S` | 기본 1.5. 출력 PNG는 최대 16,777,216 픽셀 |
 | `--out PATH` | 생략하면 임시 폴더. 입력 파일과 같으면 거부 |
 | `--text` | 쪽 텍스트를 줄 단위로(표 칸 포함). `--region`과 무관하게 쪽 전체 |
+| `--memos` | 문서 전체 메모를 `memos`에, 그 쪽 PNG에 강조와 번호. 메모를 못 읽으면 `memos`가 빠지고 `warnings`에 이유가 들어감 |
 | `--json` | 기계가 읽는 출력 |
 | `--bundled-fonts-only` | 플러그인 글꼴만 사용(기계마다 같은 결과). 기본은 사용자·시스템 글꼴(macOS `Library/Fonts`)도 사용 |
 
@@ -19,7 +20,7 @@
 
 ```json
 { "file": "...", "pageCount": 35, "page": 3, "pageSize": { "width": 793.7, "height": 1122.5 },
-  "png": "/tmp/.../page-3.png", "text": ["…"], "engine": { "name": "rhwp", "version": "0.8.7-p1", ... },
+  "png": "/tmp/.../page-3.png", "text": ["…"], "engine": { "name": "rhwp", "version": "0.8.7-p2", ... },
   "warnings": [] }
 ```
 

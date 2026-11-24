@@ -187,16 +187,57 @@ test('a missing body stays null, an empty body stays empty', () => {
 })
 
 test('problems are passed on, also when there is no memo', () => {
-  const problems = [{ code: 'bad-record' }, { code: 'section-unreadable', sectionIndex: 1 }]
+  const problems = [
+    { code: 'bad-record', count: 4 },
+    { code: 'missing-memo', count: 2 },
+    { code: 'no-body', count: 1, number: 7 },
+    { code: 'unlinked-body', count: 3, number: 0 },
+    { code: 'section-unreadable', count: 1, sectionIndex: 1 }
+  ]
   assert.deepEqual(build([], problems), { threads: [], problems })
   assert.deepEqual(build([]), { threads: [], problems: [] })
 })
 
-test('a problem this version does not know never hides the memos', () => {
-  const report = build([entry()], [{ code: 'missing-memo', count: 2 }, { code: 'future-code', number: 'x', count: -1 }])
+test('problems of one code become one, with the first number and all of the count', () => {
+  const report = build([], [
+    { code: 'no-body', number: 7 },
+    { code: 'bad-record' },
+    { code: 'no-body', number: 3 },
+    { code: 'bad-record', count: 5 },
+    { code: 'section-unreadable', sectionIndex: 2 },
+    { code: 'no-body', count: 2, number: 1 },
+    { code: 'missing-memo', count: 2 },
+    { code: 'section-unreadable', sectionIndex: 0 }
+  ])
+  assert.deepEqual(report.problems, [
+    { code: 'no-body', count: 4, number: 7 },
+    { code: 'bad-record', count: 6 },
+    { code: 'section-unreadable', count: 2, sectionIndex: 2 },
+    { code: 'missing-memo', count: 2 }
+  ])
+})
+
+test('problems this version does not know are one, and never hide the memos', () => {
+  const report = build([entry()], [
+    { code: 'missing-memo', count: 2 },
+    { code: 'future-code', number: 'x', count: -1 },
+    { code: 'other-code', count: 3 },
+    { code: 'toString' }
+  ])
   assert.equal(report.threads.length, 1)
-  assert.deepEqual(report.problems, [{ code: 'missing-memo', count: 2 }, { code: 'future-code' }])
-  assert.throws(() => build([], [{ code: 'missing-memo', count: '2' }]), (error) => error instanceof Error)
+  assert.deepEqual(report.problems, [{ code: 'missing-memo', count: 2 }, { code: 'unknown', count: 5 }])
+})
+
+test('a known problem of another shape is an error', () => {
+  for (const bad of [
+    { code: 'missing-memo', count: '2' },
+    { code: 'missing-memo', count: 0 },
+    { code: 'bad-record', count: null },
+    { code: 'no-body', count: 1 },
+    { code: 'section-unreadable', count: 1, sectionIndex: -1 }
+  ]) {
+    assert.throws(() => build([], [bad]), (error) => error instanceof Error)
+  }
 })
 
 test('anchorKey is compared as it is, whatever it holds', () => {
@@ -295,14 +336,11 @@ test('placeLabel names every place', () => {
   }
 })
 
-test('problemText says in one line what could not be read', () => {
-  assert.match(problemText({ code: 'no-body', number: 7 }), /7.*본문/)
-  assert.match(problemText({ code: 'unlinked-body', number: 8 }), /8.*연결/)
-  assert.match(problemText({ code: 'bad-record' }), /메모/)
-  assert.match(problemText({ code: 'section-unreadable', sectionIndex: 0 }), /1구역/)
+test('problemText says in one line what could not be read, and how many', () => {
+  assert.equal(problemText({ code: 'bad-record', count: 4 }), '읽지 못한 메모 기록 4개')
   assert.equal(problemText({ code: 'missing-memo', count: 3 }), '메모 3개를 읽지 못함')
-  assert.equal(problemText({ code: 'future-code' }), '알 수 없는 문제로 일부 메모를 읽지 못함')
-  for (const problem of [{ code: 'no-body', number: 7 }, { code: 'bad-record' }, { code: 'future-code' }]) {
-    assert.equal(/\n|undefined/.test(problemText(problem)), false)
-  }
+  assert.equal(problemText({ code: 'no-body', count: 2, number: 7 }), '본문이 없는 메모 2개')
+  assert.equal(problemText({ code: 'unlinked-body', count: 1, number: 8 }), '글과 연결되지 않은 메모 본문 1개')
+  assert.equal(problemText({ code: 'section-unreadable', count: 5, sectionIndex: 0 }), '읽지 못한 구역 5개')
+  assert.equal(problemText({ code: 'unknown', count: 5 }), '알 수 없는 문제로 일부 메모를 읽지 못함')
 })

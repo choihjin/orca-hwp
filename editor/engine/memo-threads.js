@@ -56,7 +56,11 @@
  * }} MemoThread
  */
 
-/** @typedef {{ code: string, number?: number, sectionIndex?: number, count?: number }} MemoProblem */
+/**
+ * One for each code: `count` says how often, `number` and `sectionIndex` are the first one's. Codes
+ * this version does not know are together `unknown`.
+ * @typedef {{ code: string, count: number, number?: number, sectionIndex?: number }} MemoProblem
+ */
 
 /** @typedef {{ threads: MemoThread[], problems: MemoProblem[] }} MemoReport */
 
@@ -75,16 +79,16 @@ const PLACE_LABELS = {
 }
 
 /**
- * What each problem the engine reports is about; a code that is not here still counts as a problem.
- * @type {Record<string, 'number' | 'sectionIndex' | 'count' | null>}
+ * What the engine says about each problem besides how often it occurs.
+ * @type {Map<string, 'number' | 'sectionIndex' | null>}
  */
-const PROBLEM_DETAILS = {
-  'no-body': 'number',
-  'unlinked-body': 'number',
-  'bad-record': null,
-  'section-unreadable': 'sectionIndex',
-  'missing-memo': 'count'
-}
+const PROBLEM_DETAILS = new Map([
+  ['bad-record', null],
+  ['missing-memo', null],
+  ['no-body', 'number'],
+  ['unlinked-body', 'number'],
+  ['section-unreadable', 'sectionIndex']
+])
 
 /** The engine gives the first 2,000 code points of `anchorText` and `paragraphText`. */
 const TEXT_LIMIT = 2000
@@ -250,8 +254,31 @@ function readEntry(value) {
 function readProblem(value) {
   const source = object(value, 'problem')
   const code = string(source, 'code')
-  const detail = Object.hasOwn(PROBLEM_DETAILS, code) ? PROBLEM_DETAILS[code] : null
-  return detail ? { code, [detail]: index(source, detail) } : { code }
+  const detail = PROBLEM_DETAILS.get(code)
+  if (detail === undefined) {
+    // Nothing is known of its shape, and it must not hide the memos.
+    const { count } = source
+    return { code: 'unknown', count: typeof count === 'number' && Number.isInteger(count) && count > 0 ? count : 1 }
+  }
+  const count = source.count === undefined ? 1 : index(source, 'count')
+  if (count === 0) throw new Error('memo JSON: count is 0')
+  return detail === null ? { code, count } : { code, count, [detail]: index(source, detail) }
+}
+
+/**
+ * @param {unknown[]} values
+ * @returns {MemoProblem[]} one for each code, in the order they first came
+ */
+function readProblems(values) {
+  /** @type {Map<string, MemoProblem>} */
+  const byCode = new Map()
+  for (const value of values) {
+    const problem = readProblem(value)
+    const first = byCode.get(problem.code)
+    if (first) first.count += problem.count
+    else byCode.set(problem.code, problem)
+  }
+  return [...byCode.values()]
 }
 
 /**
@@ -261,7 +288,7 @@ function readProblem(value) {
  */
 export function buildMemoReport(json) {
   const source = object(JSON.parse(json), 'result')
-  const problems = list(source, 'problems').map(readProblem)
+  const problems = readProblems(list(source, 'problems'))
   /** @type {{ thread: MemoThread, entries: { order: number, memo: Memo }[] }[]} */
   const groups = []
   /** @type {Map<string, (typeof groups)[number]>} */
@@ -357,18 +384,18 @@ export function publicThread(thread) {
  * @param {MemoProblem} problem
  * @returns {string}
  */
-export function problemText(problem) {
-  switch (problem.code) {
-    case 'no-body':
-      return `파일 안 번호 ${problem.number} 메모의 본문을 찾지 못함`
-    case 'unlinked-body':
-      return `파일 안 번호 ${problem.number} 메모가 글과 연결되지 않음`
+export function problemText({ code, count }) {
+  switch (code) {
     case 'bad-record':
-      return '읽지 못한 메모 기록이 있음'
-    case 'section-unreadable':
-      return `${Number(problem.sectionIndex) + 1}구역을 읽지 못해 메모가 빠졌을 수 있음`
+      return `읽지 못한 메모 기록 ${count}개`
     case 'missing-memo':
-      return `메모 ${problem.count}개를 읽지 못함`
+      return `메모 ${count}개를 읽지 못함`
+    case 'no-body':
+      return `본문이 없는 메모 ${count}개`
+    case 'unlinked-body':
+      return `글과 연결되지 않은 메모 본문 ${count}개`
+    case 'section-unreadable':
+      return `읽지 못한 구역 ${count}개`
     default:
       return '알 수 없는 문제로 일부 메모를 읽지 못함'
   }

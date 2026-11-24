@@ -209,12 +209,12 @@ test('memos are read from the engine once, every call gives its own copy', async
   let calls = 0
   const getMemos = () => {
     calls++
-    return JSON.stringify({ memos: [memoEntry], problems: [{ code: 'bad-record' }] })
+    return JSON.stringify({ memos: [memoEntry], problems: [{ code: 'bad-record', count: 1 }] })
   }
   withEngine({ getMemos }, () => {
     const report = doc.memos()
     assert.equal(report.threads[0].memos[0].text, '본문')
-    assert.deepEqual(report.problems, [{ code: 'bad-record' }])
+    assert.deepEqual(report.problems, [{ code: 'bad-record', count: 1 }])
     report.threads[0].memos[0].text = '바뀜'
     report.threads[0].page = 9
     report.problems.length = 0

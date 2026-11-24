@@ -10,6 +10,7 @@ import { ENGINE_INFO, initEngine, openDocument } from './engine/rhwp-adapter.js'
 import { detectKind } from './format.js'
 import { setupAbout } from './view/about'
 import { createController } from './view/controller'
+import { createMemoList, isMemoKey } from './view/memo-list'
 import { createStatusBar } from './view/status-bar'
 import { createViewer } from './view/viewer'
 
@@ -45,7 +46,25 @@ function frameStorage(): Storage | null {
 
 const view = element('view')
 const status = createStatusBar(element('status-text'), `${ENGINE_INFO.name} ${ENGINE_INFO.version}`)
-const viewer = createViewer({ container: view, status, onViewChange: (v) => controller.remember(v) })
+const memoList = createMemoList({
+  panel: element('memos'),
+  button: element('memo-button'),
+  now: () => new Date(),
+  onPick: (number) => {
+    const thread = controller.memo(number)
+    if (thread) {
+      viewer.showMemo(thread)
+    }
+  },
+  onToggle: (open) => controller.rememberMemos(open)
+})
+const viewer = createViewer({
+  container: view,
+  status,
+  onViewChange: (v) => controller.remember(v),
+  onMemoPick: (number) => memoList.select(number),
+  memoList
+})
 const controller = createController({ engine: { open: openDocument }, view: viewer, storage: frameStorage() })
 const about = setupAbout(element('about'), element('about-button'), () => view.focus({ preventScroll: true }))
 
@@ -57,7 +76,10 @@ window.addEventListener('keydown', (event) => {
     }
     return
   }
-  if (viewer.handleKey(event)) {
+  if (isMemoKey(event)) {
+    memoList.toggle()
+    event.preventDefault()
+  } else if (viewer.handleKey(event)) {
     event.preventDefault()
   }
 })

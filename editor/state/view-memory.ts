@@ -1,7 +1,8 @@
 // Remembers the last page and zoom per document in the frame's localStorage (design 5.7 P1), so
 // a reopened document, and an agent reopening it, lands where the last reader left it.
 
-export type View = { page: number; zoom: number }
+/** `memosClosed` is there only when the reader has closed the memo list of this document. */
+export type View = { page: number; zoom: number; memosClosed?: boolean }
 
 const PREFIX = 'hwp-viewer:view:'
 const MAX_ENTRIES = 200
@@ -62,10 +63,15 @@ function readEntry(storage: Storage, storageKey: string): Entry | null {
     const value: unknown = JSON.parse(raw)
     if (!isView(value)) return null
     const seq = (value as { seq?: unknown }).seq
-    return { page: value.page, zoom: value.zoom, seq: typeof seq === 'number' ? seq : 0 }
+    return { ...viewOf(value), seq: typeof seq === 'number' ? seq : 0 }
   } catch {
     return null
   }
+}
+
+/** The view's own fields, without a `memosClosed` that is not a boolean. */
+function viewOf({ page, zoom, memosClosed }: View): View {
+  return typeof memosClosed === 'boolean' ? { page, zoom, memosClosed } : { page, zoom }
 }
 
 /** `page` counts from 0, like the engine. Returns null when nothing valid is stored. */
@@ -73,7 +79,7 @@ export function loadView(storage: Storage | null, key: string): View | null {
   if (!storage) return null
   try {
     const entry = readEntry(storage, PREFIX + key)
-    return entry ? { page: entry.page, zoom: entry.zoom } : null
+    return entry ? viewOf(entry) : null
   } catch {
     return null
   }
@@ -93,7 +99,7 @@ export function saveView(storage: Storage | null, key: string, view: View): void
       entries.push({ storageKey, seq: readEntry(storage, storageKey)?.seq ?? 0 })
     }
     const seq = entries.reduce((max, e) => Math.max(max, e.seq), 0) + 1
-    const entry: Entry = { page: view.page, zoom: view.zoom, seq }
+    const entry: Entry = { ...viewOf(view), seq }
     storage.setItem(PREFIX + key, JSON.stringify(entry))
     entries.sort((a, b) => a.seq - b.seq)
     for (const old of entries.slice(0, Math.max(0, entries.length + 1 - MAX_ENTRIES))) {

@@ -5,7 +5,8 @@ import { documentKey, loadView, saveView } from '../state/view-memory'
 import { existsSync, readFileSync } from 'node:fs'
 import { initEngine, openDocument } from '../engine/rhwp-adapter.js'
 import { createController, isBlankPage } from './controller'
-import type { ErrorCode, ViewPort } from './controller'
+import type { MemoThread } from '../engine/memo-threads.js'
+import type { ErrorCode, MemoState, ViewPort } from './controller'
 
 type FakeDoc = EngineDocument & { disposed: number; name: string }
 
@@ -17,6 +18,9 @@ function fakeDoc(name: string, pageCount: number): FakeDoc {
     pageSize: () => ({ width: 794, height: 1123 }),
     renderPageSvg: (i) => `<svg xmlns="http://www.w3.org/2000/svg" data-page="${i}"/>`,
     pageTextRuns: () => [],
+    memos: () => ({ threads: [], problems: [] }),
+    memoCaret: () => null,
+    pageAnchorRuns: () => [],
     dispose() {
       doc.disposed++
     }
@@ -28,6 +32,8 @@ type Call =
   | { kind: 'show'; doc: EngineDocument; page: number; zoom: number | undefined }
   | { kind: 'error'; code: ErrorCode; detail: string | undefined }
   | { kind: 'clear' }
+  | { kind: 'memos'; state: MemoState }
+  | { kind: 'refresh' }
 
 function fakeView(): ViewPort & { calls: Call[]; last(): Call | undefined } {
   const calls: Call[] = []
@@ -42,6 +48,12 @@ function fakeView(): ViewPort & { calls: Call[]; last(): Call | undefined } {
     },
     clear() {
       calls.push({ kind: 'clear' })
+    },
+    prepareMemos(state) {
+      calls.push({ kind: 'memos', state })
+    },
+    refreshMemos() {
+      calls.push({ kind: 'refresh' })
     }
   }
 }
@@ -327,5 +339,206 @@ test('실제 엔진: 편람의 빈 2쪽은 빈 쪽, 그림 표지·글자 쪽은
     assert.equal(isBlankPage(doc, 2), false)
   } finally {
     doc.dispose()
+  }
+})
+
+function memoThread(number: number): MemoThread {
+  return {
+    number,
+    page: null,
+    located: false,
+    place: 'body',
+    anchorText: '예산',
+    paragraphText: '예산',
+    multiParagraph: false,
+    memos: [{ author: '가', date: null, dateText: null, text: '내용' }],
+    anchor: {
+      sectionIndex: 0, ownerParaIndex: number, paraIndex: number, path: null,
+      startCharIdx: 0, endCharIdx: 2, text: '예산', start: 0
+    },
+    caret: null
+  }
+}
+
+/** A document with `count` threads, all on its third page; `log` hears what is asked of it. */
+function memoDoc(count: number, log: string[] = []): FakeDoc {
+  const doc = fakeDoc('memos', 10)
+  doc.memos = () => {
+    log.push('memos')
+    return { threads: Array.from({ length: count }, (_, i) => memoThread(i + 1)), problems: [] }
+  }
+  doc.memoCaret = (thread) => {
+    log.push(`caret ${thread.number}`)
+    return { page: 2, x: 1, y: 2 }
+  }
+  doc.pageAnchorRuns = (i) => {
+    log.push(`layout ${i}`)
+    return []
+  }
+  return doc
+}
+
+const states = (view: { calls: Call[] }) => view.calls.flatMap((call) => (call.kind === 'memos' ? [call.state] : []))
+const refreshes = (view: { calls: Call[] }) => view.calls.filter((call) => call.kind === 'refresh').length
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function until(done: () => boolean): Promise<void> {
+  for (let n = 0; n < 200 && !done(); n++) await pause(5)
+  assert.ok(done())
+}
+
+test('메모: memos → 앞 50개의 쪽 → prepareMemos → showDocument를 동기로 부른다', () => {
+  const log: string[] = []
+  const view = fakeView()
+  const { prepareMemos, showDocument } = view
+  view.prepareMemos = (state) => {
+    log.push('prepare')
+    prepareMemos(state)
+  }
+  view.showDocument = (...args) => {
+    log.push('show')
+    showDocument(...args)
+  }
+  const c = createController({ engine: engineOf(memoDoc(120, log)), view, storage: null })
+  void c.load(bytesA)
+  assert.deepEqual(log, ['memos', ...Array.from({ length: 50 }, (_, i) => `caret ${i + 1}`), 'prepare', 'show'])
+  const [state] = states(view)
+  assert.equal(state.failed, false)
+  assert.equal(state.open, true)
+  assert.deepEqual(state.report?.threads.map((t) => t.page), Array.from({ length: 120 }, (_, i) => (i < 50 ? 3 : null)))
+  c.dispose()
+})
+
+test('메모: 나머지 묶음은 첫 칠 뒤 50개씩 찾고 그때마다 refreshMemos', async () => {
+  const log: string[] = []
+  const view = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(120, log)), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(refreshes(view), 0)
+  const found = () => states(view)[0].report?.threads.filter((t) => t.page === 3).length
+  await until(() => refreshes(view) === 1)
+  assert.equal(found(), 100)
+  await until(() => refreshes(view) === 2)
+  assert.equal(found(), 120)
+  await pause(60)
+  assert.equal(refreshes(view), 2)
+  assert.equal(log.filter((line) => line.startsWith('caret')).length, 120)
+  assert.ok(!log.some((line) => line.startsWith('layout')))
+  c.dispose()
+})
+
+test('메모: 50개 이하면 더 찾지 않는다', async () => {
+  const view = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(50)), view, storage: null })
+  await c.load(bytesA)
+  await pause(60)
+  assert.equal(refreshes(view), 0)
+  c.dispose()
+})
+
+test('메모: 찾는 사이 문서가 바뀌거나 닫히면 멈춘다', async () => {
+  for (const end of ['load', 'dispose'] as const) {
+    const log: string[] = []
+    const view = fakeView()
+    const c = createController({ engine: engineOf(memoDoc(120, log), fakeDoc('b', 3)), view, storage: null })
+    await c.load(bytesA)
+    if (end === 'load') await c.load(bytesB)
+    else c.dispose()
+    await pause(80)
+    assert.equal(refreshes(view), 0, end)
+    assert.equal(log.filter((line) => line.startsWith('caret')).length, 50, end)
+    c.dispose()
+  }
+})
+
+test('메모: memos()가 던지면 failed로 알리고 문서는 열린다', async () => {
+  const doc = fakeDoc('a', 4)
+  doc.memos = () => {
+    throw new EngineError('engine', 'getMemos')
+  }
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.deepEqual(states(view), [{ report: null, failed: true, open: true }])
+  assert.equal(view.last()?.kind, 'show')
+  c.dispose()
+})
+
+test('메모: 쪽을 찾다 던져도 메모는 남는다', async () => {
+  const doc = memoDoc(60)
+  doc.memoCaret = () => {
+    throw new Error('unreachable')
+  }
+  const view = fakeView()
+  const c = createController({ engine: engineOf(doc), view, storage: null })
+  await c.load(bytesA)
+  assert.equal(states(view)[0].report?.threads.length, 60)
+  assert.equal(states(view)[0].failed, false)
+  assert.equal(view.last()?.kind, 'show')
+  await pause(60)
+  c.dispose()
+})
+
+test('메모: 저장된 memosClosed면 닫힌 채 연다', async () => {
+  const storage = memoryStorage()
+  saveView(storage, documentKey(bytesA), { page: 3, zoom: 1.5, memosClosed: true })
+  const view = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(1)), view, storage })
+  await c.load(bytesA)
+  assert.equal(states(view)[0].open, false)
+  // The page moves on; the list stays closed for the next time.
+  c.remember({ page: 4, zoom: 1.5 })
+  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 4, zoom: 1.5, memosClosed: true })
+  c.dispose()
+})
+
+test('메모: 여닫으면 보던 쪽과 함께 바로 저장한다', async () => {
+  const storage = memoryStorage()
+  saveView(storage, documentKey(bytesA), { page: 3, zoom: 1.5 })
+  const c = createController({ engine: engineOf(memoDoc(1)), view: fakeView(), storage })
+  await c.load(bytesA)
+  c.rememberMemos(false)
+  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 3, zoom: 1.5, memosClosed: true })
+  c.remember({ page: 6, zoom: 2 })
+  c.rememberMemos(true)
+  assert.deepEqual(loadView(storage, documentKey(bytesA)), { page: 6, zoom: 2 })
+  c.dispose()
+})
+
+test('메모: 파일이 바뀌면 새 메모만 남고, 이번에 닫았으면 닫힌 채다', async () => {
+  const storage = memoryStorage()
+  const view = fakeView()
+  const c = createController({ engine: engineOf(memoDoc(2), memoDoc(3), memoDoc(1)), view, storage })
+  await c.load(bytesA)
+  assert.equal(c.memo(2)?.number, 2)
+  c.rememberMemos(false)
+  await c.load(bytesB)
+  assert.deepEqual(states(view).map((s) => [s.report?.threads.length, s.open]), [[2, true], [3, false]])
+  assert.equal(c.memo(3), states(view)[1].report?.threads[2])
+  c.rememberMemos(true)
+  saveView(storage, documentKey(bytesA), { page: 0, zoom: 1, memosClosed: true })
+  await c.load(bytesA)
+  assert.equal(states(view)[2].open, true)
+  assert.equal(c.memo(2), null)
+  c.dispose()
+  assert.equal(c.memo(1), null)
+})
+
+test('메모: 빈 한 쪽 문서라도 메모가 있거나 읽지 못했으면 안내로 가리지 않는다', async () => {
+  const blank = () => onePage('<g clip-path="url(#body-clip-0)"></g>', [''])
+  const withMemo = blank()
+  withMemo.memos = () => ({ threads: [memoThread(1)], problems: [] })
+  const withProblem = blank()
+  withProblem.memos = () => ({ threads: [], problems: [{ code: 'bad-record' }] })
+  const unread = blank()
+  unread.memos = () => {
+    throw new EngineError('engine', 'getMemos')
+  }
+  for (const doc of [withMemo, withProblem, unread]) {
+    const view = fakeView()
+    const c = createController({ engine: engineOf(doc), view, storage: null })
+    await c.load(bytesA)
+    assert.equal(view.last()?.kind, 'show')
+    c.dispose()
   }
 })

@@ -1,4 +1,5 @@
-// The one-line status bar: `HWP · 3/35쪽 · 100% · rhwp 0.8.7-p1`, plus pages that failed to render.
+// The one-line status bar: `HWP · 3/35쪽 · 100% · rhwp 0.8.7-p1`, plus pages that failed
+// to render and memos that could not be read.
 
 export type StatusState = {
   format: string
@@ -9,6 +10,7 @@ export type StatusState = {
   errorPages: number
   typed: string
   message: string
+  memosFailed: boolean
 }
 
 export function statusText(s: StatusState): { text: string; problem: string } {
@@ -23,7 +25,14 @@ export function statusText(s: StatusState): { text: string; problem: string } {
   if (s.typed) {
     parts.push(`쪽 이동: ${s.typed}_`)
   }
-  return { text: parts.join(' · '), problem: s.errorPages > 0 ? `렌더 오류 ${s.errorPages}쪽` : '' }
+  const problems: string[] = []
+  if (s.errorPages > 0) {
+    problems.push(`렌더 오류 ${s.errorPages}쪽`)
+  }
+  if (s.memosFailed) {
+    problems.push('메모를 읽지 못함')
+  }
+  return { text: parts.join(' · '), problem: problems.join(' · ') }
 }
 
 export function createStatusBar(el: HTMLElement, engine: string) {
@@ -35,7 +44,8 @@ export function createStatusBar(el: HTMLElement, engine: string) {
     engine,
     errorPages: 0,
     typed: '',
-    message: ''
+    message: '',
+    memosFailed: false
   }
   const problem = document.createElement('span')
   problem.className = 'status-problem'

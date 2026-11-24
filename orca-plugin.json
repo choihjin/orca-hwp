@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "id": "hwp-viewer",
   "name": "HWP Viewer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Read-only viewer for Hangul word processor documents (.hwp and .hwpx) inside Orca, drawn page by page with the rhwp engine. An independent project, not affiliated with Hancom.",
   "repository": "https://github.com/choihjin/orca-hwp",
   "icon": "assets/icon.png",

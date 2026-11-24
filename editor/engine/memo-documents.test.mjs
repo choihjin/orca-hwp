@@ -3,8 +3,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import {
-  endnote, filetime, footnote, groupedBoxes, hwpxFromText, memo, memoEnd, memoHwpx, memoParts, memoStart, pageEdge,
-  para, table, text, textBox
+  endnote, filetime, footnote, groupedBoxes, hiddenComment, highlighted, hwpxFromText, memo, memoEnd, memoHwpx, memoParts,
+  memoStart, pageEdge, para, table, text, textBox
 } from '../../scripts/testdata/hwpx-text.mjs'
 import { locateThreads } from './memo-locate.js'
 import { memoMarks } from './memo-marks.js'
@@ -42,6 +42,7 @@ function shown(doc, thread) {
       const textIn = ({ x, y, w, h }) =>
         glyphs
           .filter((glyph) => glyph.x > x && glyph.x < x + w && glyph.y > y && glyph.y < y + h)
+          .sort((a, b) => a.x - b.x) // as read: the layout lists a box behind the text around it
           .map((glyph) => glyph.char)
           .join('')
       const first = rects[0]
@@ -222,6 +223,14 @@ test('a memo in grouped text boxes has the page only', async () => {
   })
 })
 
+test('a memo in a box the engine has no page for stays in the list', async () => {
+  // Grouped boxes that float over a paragraph without text.
+  const floating = groupedBoxes([para(memo(1, text('떠 있는 글')))], { inline: false })
+  assertListed(await openParas(para(text('첫')), para(floating, { pageBreak: true })), { place: 'textBox', page: null, anchorText: '떠 있는 글' })
+  const inCell = table([[para(text('가')), para(textBox(para(memo(1, text('칸 안 상자')))))]])
+  assertListed(await openParas(para(text('첫')), para(inCell)), { place: 'textBox', page: null, anchorText: '칸 안 상자' })
+})
+
 test('a memo in a header, a footer or a master page has no page', async () => {
   for (const kind of /** @type {const} */ (['header', 'footer'])) {
     const edge = pageEdge(kind, para(text('앞 ') + memo(1, text('둘레 글'))))
@@ -372,6 +381,131 @@ test('a memo in a paragraph behind a footnote or a table', async () => {
     before: '앞 ',
     lines: ['본', '문']
   })
+})
+
+/**
+ * Each thread of the document has one memo and is highlighted: its text, what is left of it on the
+ * line, and the memo's body.
+ * @param {string[]} paras
+ * @param {{ anchorText: string, before?: string, lines?: string[], body?: string, place?: string, multiParagraph?: boolean }[]} expected
+ */
+async function assertAllMarked(paras, expected) {
+  const { threads, problems, shown } = await openParas(...paras)
+  assert.deepEqual(problems, [])
+  assert.deepEqual(
+    threads.map(({ place, page, located, anchorText, multiParagraph, memos }) => ({ place, page, located, anchorText, multiParagraph, bodies: memos.map((memo) => memo.text) })),
+    expected.map(({ place = 'body', anchorText, multiParagraph = false, body }, i) => ({ place, page: 1, located: true, anchorText, multiParagraph, bodies: [body ?? `메모 ${i + 1}`] }))
+  )
+  assert.deepEqual(
+    shown.map((marks) => marks.map(({ lines, before }) => ({ lines, before }))),
+    expected.map(({ anchorText, lines = [anchorText], before = '' }) => [{ lines, before }])
+  )
+}
+
+const tail = text(' 낱말 뒤로 글이 길게 이어지는 문단이며 메모와 상관이 없다.')
+
+// HWPX says which memo an end belongs to. HWP does not, so there overlapping memos may have each
+// other's text; nothing here is about HWP.
+test('memos that overlap end where each of them ends', async () => {
+  const overlap = memoStart(1) + text('가나다') + memoStart(2) + text('라마') + memoEnd(1) + text('바사아') + memoEnd(2) + text('뒤')
+  await assertAllMarked([para(overlap)], [{ anchorText: '가나다라마' }, { anchorText: '라마바사아', before: '가나다' }])
+  await assertAllMarked([para(table([[para(overlap)]]))], [
+    { place: 'tableCell', anchorText: '가나다라마' },
+    { place: 'tableCell', anchorText: '라마바사아', before: '가나다' }
+  ])
+})
+
+test('memos with the same start and different ends keep their own bodies', async () => {
+  const paras = [para(memoStart(1) + memoStart(2) + text('예산') + memoEnd(1) + text(' 전체') + memoEnd(2) + text(' 뒤'))]
+  await assertAllMarked(paras, [{ anchorText: '예산', body: '메모 1' }, { anchorText: '예산 전체', body: '메모 2' }])
+})
+
+test('a memo that ends inside one over several paragraphs, at its start and at its end', async () => {
+  await assertAllMarked(
+    [para(memoStart(1) + text('가나') + memoStart(2) + text('다라') + memoEnd(1) + text('마바')), para(text('둘째') + memoEnd(2))],
+    [{ anchorText: '가나다라' }, { anchorText: '다라마바', before: '가나', multiParagraph: true }]
+  )
+  await assertAllMarked(
+    [para(memoStart(1) + text('첫 문단')), para(memoStart(2) + text('둘째 문단') + memoEnd(1) + text(' 이어서') + memoEnd(2) + text(' 뒤'))],
+    [{ anchorText: '첫 문단', multiParagraph: true }, { anchorText: '둘째 문단 이어서' }]
+  )
+})
+
+test('a memo behind highlighter pen and one on text with it', async () => {
+  await assertAllMarked([para(highlighted('형광') + text(' 다음 ') + memo(1, text('예산')) + tail)], [{ anchorText: '예산', before: '형광 다음 ' }])
+  await assertAllMarked([para(text('앞 ') + memo(1, highlighted('예산')) + tail)], [{ anchorText: '예산', before: '앞 ' }])
+})
+
+test('memos in front of, on and behind highlighter pen in one paragraph', async () => {
+  const content = memo(1, text('앞 글')) + text(' 다음 ') + memo(2, highlighted('형광 글')) + text(' 그리고 ') + memo(3, text('뒤 글')) + tail
+  await assertAllMarked([para(content)], [
+    { anchorText: '앞 글' },
+    { anchorText: '형광 글', before: '앞 글 다음 ' },
+    { anchorText: '뒤 글', before: '앞 글 다음 형광 글 그리고 ' }
+  ])
+  // The pen is over part of the memo's text.
+  await assertAllMarked([para(text('앞 ') + memo(1, text('가') + highlighted('나다') + text('라')) + text(' ') + memo(2, text('뒤')) + tail)], [
+    { anchorText: '가나다라', before: '앞 ' },
+    { anchorText: '뒤', before: '앞 가나다라 ' }
+  ])
+})
+
+test('memos on text with highlighter pen in a table cell and in a text box', async () => {
+  const content = text('총 ') + highlighted('형광') + text(' ') + memo(1, highlighted('예산')) + text(' 뒤 ') + memo(2, text('일정')) + text(' 끝')
+  for (const [place, inside] of [['tableCell', table([[para(text('가'))], [para(content)]])], ['textBox', textBox(para(content))]]) {
+    await assertAllMarked([para(text('첫')), para(inside)], [
+      { place, anchorText: '예산', before: '총 형광 ' },
+      { place, anchorText: '일정', before: '총 형광 예산 뒤 ' }
+    ])
+  }
+})
+
+test('a memo that begins with blanks, with highlighter pen on or in front of it', async () => {
+  const blanks = { anchorText: '  공백 글', before: '앞  ', lines: ['공백 글'] }
+  await assertAllMarked([para(text('앞') + memo(1, highlighted('  공백 글')) + tail)], [blanks])
+  await assertAllMarked([para(text('앞') + memo(1, text('  ') + highlighted('공백 글')) + tail)], [blanks])
+  await assertAllMarked([para(highlighted('앞') + memo(1, text('  공백 글')) + tail)], [blanks])
+})
+
+test('memos in front of, on and behind a hidden comment in one paragraph', async () => {
+  const hidden = hiddenComment(para(text('숨은 설명')))
+  await assertAllMarked([para(text('앞 ') + hidden + memo(1, text('예산')) + tail)], [{ anchorText: '예산', before: '앞 ' }])
+  const content = memo(1, text('앞 글')) + hidden + text(' 다음 ') + memo(2, text('가') + hidden + text('나')) + text(' 그리고 ') + memo(3, text('뒤 글')) + tail
+  await assertAllMarked([para(content)], [
+    { anchorText: '앞 글' },
+    { anchorText: '가나', before: '앞 글 다음 ' },
+    { anchorText: '뒤 글', before: '앞 글 다음 가나 그리고 ' }
+  ])
+  // With highlighter pen too, and in a cell.
+  const both = highlighted('형광') + hidden + text(' ') + memo(1, highlighted('예산')) + hidden + text(' ') + memo(2, text('일정')) + text(' 끝')
+  for (const [place, inside] of [['body', both], ['tableCell', table([[para(both)]])]]) {
+    await assertAllMarked([para(inside)], [
+      { place, anchorText: '예산', before: '형광 ' },
+      { place, anchorText: '일정', before: '형광 예산 ' }
+    ])
+  }
+})
+
+/** The 하 under the only highlight: which one on the page, from 1. */
+async function markedRepeat(/** @type {string} */ content) {
+  const { doc, threads, problems, shown } = await openParas(para(content))
+  assert.deepEqual(problems, [])
+  assert.deepEqual(threads.map(({ located, anchorText }) => [located, anchorText]), [[true, '하']])
+  assert.deepEqual(shown[0].map(({ lines }) => lines), [['하']])
+  const right = shown[0][0].badge.x
+  return doc.pageAnchorRuns(0).flatMap((run) => Array.from(run.text).filter((char, at) => char === '하' && run.x + run.charX[at + 1] < right + 1)).length
+}
+
+test('a memo behind an inline object is on its own character, not on the same one before it', async () => {
+  const repeated = text('하') + memo(1, text('하')) + text('하')
+  assert.equal(await markedRepeat(textBox(para(text('상자'))) + repeated), 2)
+  assert.equal(await markedRepeat(table([[para(table([[para(text('칸'))]]) + repeated)]])), 2)
+})
+
+test('a memo behind an inline object, where no text repeats, is highlighted', async () => {
+  await assertAllMarked([para(textBox(para(text('상자'))) + text('가나') + memo(1, text('다라')) + text('마바'))], [
+    { anchorText: '다라', before: '상자가나' }
+  ])
 })
 
 test('a memo that begins with blanks is highlighted from its first character', async () => {

@@ -51,8 +51,8 @@
         },
         {
           "path": "build/rhwp-patches/v0.8.7-memo-list.diff",
-          "sha256": "91ea1789943e4a817f40551089c28e916d4df943262b0fe0abb6410214451eeb",
-          "size": 140239
+          "sha256": "c41e1c735c35c88d8d7686d7d40cc4129b8639cb75388260027ea33a410b5659",
+          "size": 158001
         }
       ],
       "files": {
@@ -65,8 +65,8 @@
           "size": 183809
         },
         "rhwp_bg.wasm": {
-          "sha256": "52335024e1f5080596e621757cee16481d528d58ff025b0b9d45465ae7cb8281",
-          "size": 11879865
+          "sha256": "5774b93f5e15ba5aa5c1466b3c8152013afe0099dac915e52088839fef78b274",
+          "size": 11880529
         },
         "rhwp_bg.wasm.d.ts": {
           "sha256": "b41c8366f78c8d1a152183f4a81bca2b0306f14c4c5e2544fcf7e8a06b745ceb",

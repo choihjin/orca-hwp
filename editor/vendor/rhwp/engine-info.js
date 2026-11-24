@@ -5,6 +5,6 @@ export const ENGINE_INFO = Object.freeze({
   "source": "https://registry.npmjs.org/@rhwp/core/-/core-0.8.7.tgz (upstream github.com/edwardkim/rhwp @ 1a76570e833917d15817415a53c09ad61ab3203f) + build/rhwp-patches/v0.8.7-tac-sibling-reset.diff + build/rhwp-patches/v0.8.7-memo-list.diff",
   "sha256": {
     "js": "3637591462c15394b9fdd2e9db4921ad87c7d9bbd23a95d827570b19cc4e6628",
-    "wasm": "52335024e1f5080596e621757cee16481d528d58ff025b0b9d45465ae7cb8281"
+    "wasm": "5774b93f5e15ba5aa5c1466b3c8152013afe0099dac915e52088839fef78b274"
   }
 })

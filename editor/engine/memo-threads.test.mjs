@@ -5,7 +5,8 @@ import {
   placeLabel,
   problemText,
   publicThread,
-  shortDate
+  shortDate,
+  shownAnchorText
 } from './memo-threads.js'
 
 /** One entry of the engine's getMemos() JSON, as the 0.8.7-p2 contract describes it. */
@@ -89,7 +90,7 @@ test('a thread carries its anchor and has no page until it is located', () => {
     paragraphText: '셋째 문단의 "예산" 낱말',
     multiParagraph: false,
     memos: [{ author: '검토자 가', date: '2026-11-20T08:24:04Z', dateText: null, text: '본문' }],
-    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산' },
+    anchor: { sectionIndex: 0, ownerParaIndex: 7, paraIndex: 1, path, startCharIdx: 0, endCharIdx: 2, text: '예산', start: 0 },
     caret: null
   })
 })
@@ -133,9 +134,30 @@ test('a memo outside body text keeps the paragraph that owns it', () => {
     path: null,
     startCharIdx: null,
     endCharIdx: null,
-    text: '예산'
+    text: '예산',
+    start: null
   })
   assert.equal(threads[1].anchor, null)
+})
+
+test('a memo starts for the engine at its first character that is not blank', () => {
+  const startOf = (/** @type {object} */ over) => build([entry({ startCharIdx: 8, endCharIdx: 20, ...over })]).threads[0].anchor?.start
+  assert.equal(startOf({ anchorText: ' 갑' }), 9)
+  assert.equal(startOf({ anchorText: '\n \t😀' }), 11)
+  assert.equal(startOf({ anchorText: '갑 을' }), 8)
+  assert.equal(startOf({ anchorText: ' \n' }), 8)
+  assert.equal(startOf({ anchorText: '', endCharIdx: 8 }), 8)
+  assert.equal(startOf({ startCharIdx: null, endCharIdx: null, place: 'footnote' }), null)
+  // what people and agents read keeps its blanks
+  assert.equal(build([entry({ anchorText: ' 갑' })]).threads[0].anchorText, ' 갑')
+})
+
+test('a memo over several paragraphs does not start past the end of its first', () => {
+  const multi = { multiParagraph: true, endCharIdx: null, paragraphText: '가나다 ', startCharIdx: 3 }
+  const startOf = (/** @type {object} */ over) => build([entry({ ...multi, ...over })]).threads[0].anchor?.start
+  assert.equal(startOf({ anchorText: ' \n다음 문단' }), 3)
+  assert.equal(startOf({ startCharIdx: 4, anchorText: '\n다음 문단' }), 4)
+  assert.equal(startOf({ paragraphText: '가나다 라', anchorText: ' 라\n다음 문단' }), 4)
 })
 
 test('control characters are removed, line breaks, tabs and markup stay as written', () => {
@@ -168,6 +190,40 @@ test('problems are passed on, also when there is no memo', () => {
   const problems = [{ code: 'bad-record' }, { code: 'section-unreadable', sectionIndex: 1 }]
   assert.deepEqual(build([], problems), { threads: [], problems })
   assert.deepEqual(build([]), { threads: [], problems: [] })
+})
+
+test('a problem this version does not know never hides the memos', () => {
+  const report = build([entry()], [{ code: 'missing-memo', count: 2 }, { code: 'future-code', number: 'x', count: -1 }])
+  assert.equal(report.threads.length, 1)
+  assert.deepEqual(report.problems, [{ code: 'missing-memo', count: 2 }, { code: 'future-code' }])
+  assert.throws(() => build([], [{ code: 'missing-memo', count: '2' }]), (error) => error instanceof Error)
+})
+
+test('anchorKey is compared as it is, whatever it holds', () => {
+  const keys = ['0/3/8-8#1', '0/3/8-8#2', '0/3/8-8#1']
+  assert.deepEqual(build(keys.map((anchorKey, i) => entry({ anchorKey, number: i }))).threads.map((one) => one.memos.length), [2, 1])
+})
+
+test('text the engine cut short is shown with an ellipsis, and given to agents as it is', () => {
+  const shown = (/** @type {object} */ over) => {
+    const [one] = build([entry(over)]).threads
+    assert.equal(publicThread(one).anchorText, one.anchorText)
+    return shownAnchorText(one)
+  }
+  const cut = '가'.repeat(2000)
+  assert.equal(shown({}), '예산')
+  assert.equal(shown({ anchorText: cut, startCharIdx: 8, endCharIdx: 2108 }), `${cut}…`)
+  assert.equal(shown({ anchorText: cut, startCharIdx: 8, endCharIdx: 2008 }), cut)
+  // control characters and surrogate pairs do not make a text look cut
+  assert.equal(shown({ anchorText: '예\u0001산😀', startCharIdx: 8, endCharIdx: 12 }), '예산😀')
+  // a range without text of its own has nothing to cut
+  assert.equal(shown({ anchorText: '', startCharIdx: 8, endCharIdx: 9 }), '')
+  // without both ends, only the engine's limit tells
+  const outside = { place: 'header', paraIndex: null, startCharIdx: null, endCharIdx: null }
+  assert.equal(shown({ ...outside, anchorText: cut }), `${cut}…`)
+  assert.equal(shown({ ...outside, anchorText: '머리말' }), '머리말')
+  assert.equal(shown({ multiParagraph: true, endCharIdx: null, anchorText: cut }), `${cut}…`)
+  assert.equal(shown({ ...outside, place: 'masterPage', ownerParaIndex: null, anchorText: cut }), `${cut}…`)
 })
 
 test('JSON of another shape is an error, never an empty list', () => {
@@ -244,7 +300,8 @@ test('problemText says in one line what could not be read', () => {
   assert.match(problemText({ code: 'unlinked-body', number: 8 }), /8.*연결/)
   assert.match(problemText({ code: 'bad-record' }), /메모/)
   assert.match(problemText({ code: 'section-unreadable', sectionIndex: 0 }), /1구역/)
-  assert.match(problemText({ code: 'future-code' }), /메모/)
+  assert.equal(problemText({ code: 'missing-memo', count: 3 }), '메모 3개를 읽지 못함')
+  assert.equal(problemText({ code: 'future-code' }), '알 수 없는 문제로 일부 메모를 읽지 못함')
   for (const problem of [{ code: 'no-body', number: 7 }, { code: 'bad-record' }, { code: 'future-code' }]) {
     assert.equal(/\n|undefined/.test(problemText(problem)), false)
   }

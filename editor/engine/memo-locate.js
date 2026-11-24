@@ -22,9 +22,18 @@ const NO_PAGE = new Set(['header', 'footer', 'masterPage', 'unlinked'])
 const IN_LAYOUT = new Set(['body', 'tableCell', 'textBox'])
 
 /**
+ * The thread as the caret is asked for: at the first character that is not blank.
+ * @param {MemoThread} thread
+ * @returns {MemoThread}
+ */
+function atStart(thread) {
+  return thread.anchor ? { ...thread, anchor: { ...thread.anchor, startCharIdx: thread.anchor.start } } : thread
+}
+
+/**
  * Sets `caret`, `page` (from 1) and, when `verify` is set, `located` of each thread. Without `verify`
  * no layout is read, and a thread that is already located stays as it is. Located means the page
- * shows the highlight of the memo's first character.
+ * shows the memo's highlight.
  * @param {MemoPages} doc
  * @param {MemoThread[]} threads
  * @param {{ verify: boolean }} options
@@ -48,7 +57,7 @@ export function locateThreads(doc, threads, { verify }) {
 
   for (const thread of threads) {
     if (thread.located && !verify) continue
-    const caret = NO_PAGE.has(thread.place) ? null : doc.memoCaret(thread)
+    const caret = NO_PAGE.has(thread.place) ? null : doc.memoCaret(atStart(thread))
     thread.caret = caret
     thread.page = caret && caret.page + 1
     thread.located = false

@@ -92,6 +92,12 @@ function paragraphCopies({ anchor }, runs) {
 /** @typedef {{ run: AnchorRun, from: number, to: number, text: string }} Part */
 
 /**
+ * The memo's characters as the file has them, the position of the first, and the position the memo
+ * begins at past blanks.
+ * @typedef {{ chars: string[], from: number, start: number }} Wanted
+ */
+
+/**
  * What a copy has of the memo: its characters, or only a place for the number.
  * @typedef {{ pieces: Piece[], parts: Part[], spot: { x: number, y: number } | null }} Find
  */
@@ -125,7 +131,14 @@ function findIn(thread, pieces, start, end) {
 }
 
 /**
- * Whether two finds have a character (or the place of the number) in common.
+ * Whether any two have a character, or the place of the number, in common.
+ * @template T
+ * @param {T[]} list
+ * @param {(a: T, b: T) => boolean} meet
+ */
+const anyMeet = (list, meet) => list.some((a, i) => list.slice(i + 1).some((b) => meet(a, b)))
+
+/**
  * @param {Find} a
  * @param {Find} b
  */
@@ -155,29 +168,56 @@ function atCaret({ pieces }, start, { x, y }) {
 }
 
 /**
- * Whether every character is the memo's character at that position. One wrong run means the copy is
- * of another text, so none of it counts.
+ * Whether the memo begins here and every character is the memo's character at that position. One
+ * wrong run means the copy is of another text, so none of it counts.
  * @param {Find} find
- * @param {string[]} wanted the memo's characters
- * @param {number} start
+ * @param {Wanted} wanted
  */
-function sameText({ parts }, wanted, start) {
-  return parts.every(({ run, from, text }) => {
-    const at = run.charStart + from - start
-    return wanted.slice(at, at + Array.from(text).length).join('') === text
+function isMemoText({ parts, spot }, { chars, from: base, start }) {
+  if (spot) return true
+  return (
+    parts[0].run.charStart + parts[0].from === start &&
+    parts.every(({ run, from, text }) => {
+      const at = run.charStart + from - base
+      return chars.slice(at, at + Array.from(text).length).join('') === text
+    })
+  )
+}
+
+/**
+ * Whether the parts read on from one to the next: no character missing but blanks, and on the page
+ * further right on the line or on a line below.
+ * @param {Find} find
+ * @param {Wanted} wanted
+ */
+function readsOn({ parts }, { chars, from: base }) {
+  return parts.every((part, i) => {
+    const before = parts[i - 1]
+    if (!before) return true
+    const gap = chars.slice(before.run.charStart + before.to - base, part.run.charStart + part.from - base)
+    if (gap.some((char) => /\S/.test(char))) return false
+    const a = before.run
+    const b = part.run
+    const shared = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+    if (shared > Math.min(a.h, b.h) / 2) return b.x + b.charX[part.from] >= a.x + a.charX[before.to] - 1
+    return b.y > a.y
   })
 }
 
 /**
- * Whether the memo begins here. Blanks and line breaks before the first run may have no glyph.
- * @param {Find} find
- * @param {string[]} wanted
- * @param {number} start
+ * A copy as text with the position it begins at: copies of a repeated heading row are alike.
+ * @param {Piece[]} pieces
  */
-function hasFirst({ parts, spot }, wanted, start) {
-  if (spot) return true
-  const first = parts[0].run.charStart + parts[0].from
-  return wanted.slice(0, first - start).every((char) => /\s/.test(char))
+const copyText = (pieces) => `${pieces[0].run.charStart}:${pieces.map(({ run }) => run.text).join('')}`
+
+/**
+ * @param {Piece[]} a
+ * @param {Piece[]} b
+ */
+function sharePlace(a, b) {
+  return a.some((p) =>
+    b.some((q) => p.run.charStart === q.run.charStart || (p.run.charStart < endOf(q) && q.run.charStart < endOf(p)))
+  )
 }
 
 /**
@@ -205,8 +245,8 @@ function toMark(number, { parts, spot }) {
 
 /**
  * The thread on one page. `hasStart` says the memo's first character is there, whatever page the
- * caret is on; `mark` is what may be highlighted. Text the memo is not about is never highlighted:
- * when in doubt there is no mark.
+ * caret is on; `mark` is what may be highlighted, only on the caret's page. Text the memo is not
+ * about is never highlighted: when in doubt there is no mark.
  * @param {MemoThread} thread
  * @param {AnchorRun[]} runs of the page
  * @param {number} pageIndex from 0
@@ -214,25 +254,36 @@ function toMark(number, { parts, spot }) {
  */
 export function markThread(thread, runs, pageIndex) {
   const { anchor, caret, multiParagraph } = thread
-  const start = anchor?.startCharIdx ?? null
-  const end = multiParagraph ? Infinity : (anchor?.endCharIdx ?? null)
-  if (!anchor || start === null || end === null) return { hasStart: false, mark: null }
-  const wanted =
-    anchor.text === '' && multiParagraph ? Array.from(thread.paragraphText).slice(start) : Array.from(anchor.text)
+  const last = multiParagraph ? Infinity : (anchor?.endCharIdx ?? null)
+  if (!anchor || anchor.startCharIdx === null || anchor.start === null || last === null) return { hasStart: false, mark: null }
+  const { start, startCharIdx: from } = anchor
+  const chars =
+    anchor.text === '' && multiParagraph ? Array.from(thread.paragraphText).slice(from) : Array.from(anchor.text)
+  const wanted = { chars, from, start }
+  // The engine cuts a long text short; what cannot be compared is not marked.
+  const end = chars.length > 0 ? Math.min(last, from + chars.length) : last
 
   const copies = paragraphCopies(thread, runs)
-  let finds = copies.flatMap((pieces) => findIn(thread, pieces, start, end) ?? [])
-  const repeated = finds.some((find, i) => finds.slice(i + 1).some((other) => overlap(find, other)))
-  // Without a position in common they are one text that the layout lists out of order.
-  if (!repeated && finds.length > 1) finds = [findIn(thread, finds.flatMap((find) => find.pieces), start, end) ?? finds[0]]
-  const hasStart = finds.some((find) => sameText(find, wanted, start) && hasFirst(find, wanted, start))
+  const finds = copies.flatMap((pieces) => findIn(thread, pieces, start, end) ?? [])
+  const same = finds.filter((find) => isMemoText(find, wanted))
+  const hasStart = same.length > 0
+  if (!hasStart || !caret || pageIndex !== caret.page) return { hasStart, mark: null }
+  // Text boxes of one drawing object share a path, and the caret is at one of them for all.
+  if (thread.place === 'textBox' && anyMeet(copies, sharePlace)) return { hasStart, mark: null }
 
-  if (!caret) return { hasStart, mark: null }
-  const chosen = repeated ? finds.filter((find) => pageIndex === caret.page && atCaret(find, start, caret)) : finds
-  if (chosen.length !== 1 || !sameText(chosen[0], wanted, start)) return { hasStart, mark: null }
-  // The first character on another page is a heading row repeated there; the rest may run on.
-  const allowed = hasFirst(chosen[0], wanted, start) ? pageIndex === caret.page : pageIndex >= caret.page
-  return { hasStart, mark: allowed ? toMark(thread.number, chosen[0]) : null }
+  /** @type {Find | null} */
+  let chosen = same[0]
+  if (anyMeet(finds, overlap)) {
+    // A heading row repeats alike; where the copies differ, the path is not only the memo's.
+    if (same.length > 1 && new Set(copies.map(copyText)).size > 1) return { hasStart, mark: null }
+    const near = same.filter((find) => atCaret(find, start, caret))
+    chosen = near.length === 1 ? near[0] : null
+  } else if (finds.length > 1) {
+    // One text that the layout lists out of order, if it reads on and is all the memo's.
+    chosen = findIn(thread, finds.flatMap((find) => find.pieces), start, end)
+  }
+  if (!chosen || !isMemoText(chosen, wanted) || !readsOn(chosen, wanted)) return { hasStart, mark: null }
+  return { hasStart, mark: toMark(thread.number, chosen) }
 }
 
 /**

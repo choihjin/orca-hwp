@@ -19,7 +19,8 @@
  * Where the memo's text is. `ownerParaIndex` is the paragraph directly in the section; `path` leads
  * from it into table cells and text boxes. Character positions count code points. All but the first
  * two are null outside body text, table cells and text boxes. `text` is the memo's text exactly as
- * the file has it: positions count its control characters too.
+ * the file has it: positions count its control characters too. `start` is `startCharIdx` past the
+ * blanks `text` begins with, which may have no glyph or end another page than the text.
  * @typedef {{
  *   sectionIndex: number,
  *   ownerParaIndex: number,
@@ -27,7 +28,8 @@
  *   path: CellStep[] | null,
  *   startCharIdx: number | null,
  *   endCharIdx: number | null,
- *   text: string
+ *   text: string,
+ *   start: number | null
  * }} MemoAnchor
  */
 
@@ -54,7 +56,7 @@
  * }} MemoThread
  */
 
-/** @typedef {{ code: string, number?: number, sectionIndex?: number }} MemoProblem */
+/** @typedef {{ code: string, number?: number, sectionIndex?: number, count?: number }} MemoProblem */
 
 /** @typedef {{ threads: MemoThread[], problems: MemoProblem[] }} MemoReport */
 
@@ -71,6 +73,21 @@ const PLACE_LABELS = {
   masterPage: '바탕쪽',
   unlinked: '글과 연결되지 않음'
 }
+
+/**
+ * What each problem the engine reports is about; a code that is not here still counts as a problem.
+ * @type {Record<string, 'number' | 'sectionIndex' | 'count' | null>}
+ */
+const PROBLEM_DETAILS = {
+  'no-body': 'number',
+  'unlinked-body': 'number',
+  'bad-record': null,
+  'section-unreadable': 'sectionIndex',
+  'missing-memo': 'count'
+}
+
+/** The engine gives the first 2,000 code points of `anchorText` and `paragraphText`. */
+const TEXT_LIMIT = 2000
 
 /**
  * Removes C0 controls (but not line feed and tab) and DEL.
@@ -163,6 +180,19 @@ function cellPath(source) {
 }
 
 /**
+ * @param {number | null} startCharIdx
+ * @param {string} text the memo's text
+ * @param {string | null} paragraph the text of the paragraph it begins in, when it runs on into others
+ * @returns {number | null} the first character that is not blank, if the memo has one there
+ */
+function startOf(startCharIdx, text, paragraph) {
+  if (startCharIdx === null) return null
+  const blanks = Array.from(text).findIndex((char) => /\S/.test(char))
+  const start = startCharIdx + Math.max(blanks, 0)
+  return paragraph !== null && start >= Array.from(paragraph).length ? startCharIdx : start
+}
+
+/**
  * @param {unknown} value
  * @returns {{ order: number, key: string | null, thread: MemoThread, memo: Memo }} `key` is null
  *   for a memo that never shares a thread
@@ -176,12 +206,15 @@ function readEntry(value) {
   const sectionIndex = indexOrNull(source, 'sectionIndex')
   const ownerParaIndex = indexOrNull(source, 'ownerParaIndex')
   const anchorText = string(source, 'anchorText')
+  const paragraphText = string(source, 'paragraphText')
+  const startCharIdx = indexOrNull(source, 'startCharIdx')
   const spot = {
     paraIndex: indexOrNull(source, 'paraIndex'),
     path: cellPath(source),
-    startCharIdx: indexOrNull(source, 'startCharIdx'),
+    startCharIdx,
     endCharIdx: indexOrNull(source, 'endCharIdx'),
-    text: anchorText
+    text: anchorText,
+    start: startOf(startCharIdx, anchorText, source.multiParagraph ? paragraphText : null)
   }
   const dateText = stringOrNull(source, 'dateText')
   const text = stringOrNull(source, 'text')
@@ -201,7 +234,7 @@ function readEntry(value) {
       located: false,
       place: /** @type {MemoPlace} */ (place),
       anchorText: clean(anchorText),
-      paragraphText: clean(string(source, 'paragraphText')),
+      paragraphText: clean(paragraphText),
       multiParagraph: source.multiParagraph,
       memos: [],
       anchor: sectionIndex === null || ownerParaIndex === null ? null : { sectionIndex, ownerParaIndex, ...spot },
@@ -216,11 +249,9 @@ function readEntry(value) {
  */
 function readProblem(value) {
   const source = object(value, 'problem')
-  /** @type {MemoProblem} */
-  const problem = { code: string(source, 'code') }
-  if (source.number !== undefined) problem.number = index(source, 'number')
-  if (source.sectionIndex !== undefined) problem.sectionIndex = index(source, 'sectionIndex')
-  return problem
+  const code = string(source, 'code')
+  const detail = Object.hasOwn(PROBLEM_DETAILS, code) ? PROBLEM_DETAILS[code] : null
+  return detail ? { code, [detail]: index(source, detail) } : { code }
 }
 
 /**
@@ -293,6 +324,18 @@ export function fullDate(memo) {
 }
 
 /**
+ * The memo's text for people to read, with `…` when the engine cut it short.
+ * @param {MemoThread} thread
+ * @returns {string}
+ */
+export function shownAnchorText({ anchorText, anchor }) {
+  const length = Array.from(anchor?.text ?? anchorText).length
+  const known = anchor !== null && anchor.startCharIdx !== null && anchor.endCharIdx !== null
+  const cut = known ? length < Number(anchor.endCharIdx) - Number(anchor.startCharIdx) : length >= TEXT_LIMIT
+  return cut && anchorText !== '' ? `${anchorText}…` : anchorText
+}
+
+/**
  * The thread as agents get it: a copy without the engine position.
  * @param {MemoThread} thread
  * @returns {Omit<MemoThread, 'anchor' | 'caret'>}
@@ -317,17 +360,17 @@ export function publicThread(thread) {
 export function problemText(problem) {
   switch (problem.code) {
     case 'no-body':
-      return `파일 안 번호 ${problem.number ?? '?'} 메모의 본문을 찾지 못함`
+      return `파일 안 번호 ${problem.number} 메모의 본문을 찾지 못함`
     case 'unlinked-body':
-      return `파일 안 번호 ${problem.number ?? '?'} 메모가 글과 연결되지 않음`
+      return `파일 안 번호 ${problem.number} 메모가 글과 연결되지 않음`
     case 'bad-record':
       return '읽지 못한 메모 기록이 있음'
     case 'section-unreadable':
-      return problem.sectionIndex === undefined
-        ? '읽지 못한 구역이 있어 메모가 빠졌을 수 있음'
-        : `${problem.sectionIndex + 1}구역을 읽지 못해 메모가 빠졌을 수 있음`
+      return `${Number(problem.sectionIndex) + 1}구역을 읽지 못해 메모가 빠졌을 수 있음`
+    case 'missing-memo':
+      return `메모 ${problem.count}개를 읽지 못함`
     default:
-      return '일부 메모를 읽지 못함'
+      return '알 수 없는 문제로 일부 메모를 읽지 못함'
   }
 }
 

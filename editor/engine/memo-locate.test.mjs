@@ -27,6 +27,7 @@ function thread(over = {}) {
       startCharIdx: 0,
       endCharIdx: 2,
       text: rest.anchorText ?? '예산',
+      start: 0,
       ...anchor
     },
     caret: null,
@@ -68,7 +69,7 @@ function fakeDoc(candidate, pages) {
 
 /**
  * `[page, located]` after locating one thread.
- * @param {ReturnType<typeof fakeDoc>} doc
+ * @param {Parameters<typeof locateThreads>[0]} doc
  * @param {MemoThread} one
  */
 function locate(doc, one, options = { verify: true }) {
@@ -145,9 +146,25 @@ test('text that only runs on keeps the candidate, not located', () => {
   assert.deepEqual(locate(fakeDoc(1, [[], [], tail]), long()), [2, false])
 })
 
-test('blanks without a glyph before the first run do not hide the start', () => {
-  const broken = () => thread({ anchorText: '\n예산', paragraphText: '\n예산', anchor: { endCharIdx: 3 } })
-  assert.deepEqual(locate(fakeDoc(1, [[], [run('예산', { charStart: 1 })], []]), broken()), [2, true])
+test('a memo that begins with blanks is looked for at its first other character', () => {
+  /** @type {(number | null | undefined)[]} */
+  const asked = []
+  const broken = thread({ anchorText: '\n예산', paragraphText: '\n예산', anchor: { endCharIdx: 3, start: 1 } })
+  const doc = {
+    ...fakeDoc(1, [[], [run('예산', { charStart: 1 })], []]),
+    memoCaret(/** @type {MemoThread} */ each) {
+      asked.push(each.anchor?.startCharIdx)
+      return { page: 1, x: 0, y: 0 }
+    }
+  }
+  assert.deepEqual(locate(doc, broken), [2, true])
+  assert.deepEqual(asked, [1])
+  // the thread itself keeps where the memo begins in the file
+  assert.equal(broken.anchor?.startCharIdx, 0)
+})
+
+test('a thread without an anchor asks for no changed position', () => {
+  assert.deepEqual(locate(fakeDoc(null, [here]), { ...thread(), anchor: null }), [null, false])
 })
 
 test('a repeated call drops a place that no longer holds', () => {

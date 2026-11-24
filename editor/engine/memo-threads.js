@@ -11,8 +11,11 @@
 
 /**
  * `date` is UTC (`YYYY-MM-DDTHH:MM:SSZ`); `dateText` is the file's own text, only when there is no
- * `date`. `text` is null when the file has no body for the memo.
- * @typedef {{ author: string, date: string | null, dateText: string | null, text: string | null }} Memo
+ * `date`. `text` is null when the file has no body for the memo; `textTruncated` says the body goes
+ * on where it could not be read.
+ * @typedef {{
+ *   author: string, date: string | null, dateText: string | null, text: string | null, textTruncated?: boolean
+ * }} Memo
  */
 
 /**
@@ -44,7 +47,8 @@
 
 /**
  * `number` and `page` count from 1; `page` is null when unknown. `located` says the highlight was
- * found on that page. `page`, `located` and `caret` are set by memo-locate.js.
+ * found on that page. `page`, `located` and `caret` are set by memo-locate.js. `ambiguous` says the
+ * file does not tell for certain which text the memo is on.
  * @typedef {{
  *   number: number,
  *   page: number | null,
@@ -54,6 +58,7 @@
  *   paragraphText: string,
  *   multiParagraph: boolean,
  *   memos: Memo[],
+ *   ambiguous?: boolean,
  *   anchor: MemoAnchor | null,
  *   caret: MemoCaret | null
  * }} MemoThread
@@ -148,6 +153,18 @@ function stringOrNull(source, key) {
 }
 
 /**
+ * A flag that an earlier engine does not give.
+ * @param {Record<string, unknown>} source
+ * @param {string} key
+ * @returns {boolean}
+ */
+function flag(source, key) {
+  const value = source[key] === undefined ? false : source[key]
+  if (typeof value !== 'boolean') throw new Error(`memo JSON: ${key} is not a boolean`)
+  return value
+}
+
+/**
  * A count or an index: rhwp gives unsigned integers.
  * @param {Record<string, unknown>} source
  * @param {string} key
@@ -226,17 +243,19 @@ function readEntry(value) {
     // Behind an object the paragraph's text confirms the place, which it cannot with characters removed.
     inlineBefore: inlineBefore && clean(paragraphText) !== paragraphText ? null : inlineBefore
   }
+  const ambiguous = flag(source, 'ambiguous')
   const dateText = stringOrNull(source, 'dateText')
   const text = stringOrNull(source, 'text')
   return {
     order: index(source, 'number'),
-    // Over several paragraphs "the same text" needs the same end too.
-    key: source.multiParagraph && spot.endCharIdx === null ? null : anchorKey,
+    // "The same text" has to be certain, and over several paragraphs needs the same end too.
+    key: ambiguous || (source.multiParagraph && spot.endCharIdx === null) ? null : anchorKey,
     memo: {
       author: clean(string(source, 'author')),
       date: stringOrNull(source, 'date'),
       dateText: dateText === null ? null : clean(dateText),
-      text: text === null ? null : clean(text)
+      text: text === null ? null : clean(text),
+      textTruncated: flag(source, 'textTruncated')
     },
     thread: {
       number: 0,
@@ -247,6 +266,7 @@ function readEntry(value) {
       paragraphText: clean(paragraphText),
       multiParagraph: source.multiParagraph,
       memos: [],
+      ambiguous,
       anchor: sectionIndex === null || ownerParaIndex === null ? null : { sectionIndex, ownerParaIndex, ...spot },
       caret: null
     }
@@ -357,21 +377,42 @@ export function fullDate(memo) {
 }
 
 /**
- * The memo's text for people to read, with `…` when the engine cut it short.
+ * Whether the engine cut `anchorText` short. Without a certain range only the limit tells, and a
+ * text of exactly that length counts as cut.
+ * @param {MemoThread} thread
+ * @returns {boolean}
+ */
+function isAnchorTextCut({ anchorText, anchor, ambiguous }) {
+  const length = Array.from(anchor?.text ?? anchorText).length
+  if (length < TEXT_LIMIT) return false
+  const known = !ambiguous && anchor !== null && anchor.startCharIdx !== null && anchor.endCharIdx !== null
+  return !known || length < Number(anchor.endCharIdx) - Number(anchor.startCharIdx)
+}
+
+/**
+ * The text the memo is on for people to read, with `…` when the engine cut it short.
  * @param {MemoThread} thread
  * @returns {string}
  */
-export function shownAnchorText({ anchorText, anchor }) {
-  const length = Array.from(anchor?.text ?? anchorText).length
-  const known = anchor !== null && anchor.startCharIdx !== null && anchor.endCharIdx !== null
-  const cut = known ? length < Number(anchor.endCharIdx) - Number(anchor.startCharIdx) : length >= TEXT_LIMIT
-  return cut && anchorText !== '' ? `${anchorText}…` : anchorText
+export function shownAnchorText(thread) {
+  return isAnchorTextCut(thread) ? `${thread.anchorText}…` : thread.anchorText
+}
+
+/**
+ * The memo's body for people to read, saying so when it goes on; empty when there is none.
+ * @param {Pick<Memo, 'text' | 'textTruncated'>} memo
+ * @returns {string}
+ */
+export function shownMemoText({ text, textTruncated }) {
+  const shown = text ?? ''
+  if (!textTruncated) return shown
+  return shown.trim() === '' ? '(일부 생략)' : `${shown} (일부 생략)`
 }
 
 /**
  * The thread as agents get it: a copy without the engine position.
  * @param {MemoThread} thread
- * @returns {Omit<MemoThread, 'anchor' | 'caret'>}
+ * @returns {Omit<MemoThread, 'anchor' | 'caret' | 'ambiguous'> & { anchorTextTruncated: boolean }}
  */
 export function publicThread(thread) {
   return {
@@ -382,6 +423,7 @@ export function publicThread(thread) {
     paragraphText: thread.paragraphText,
     multiParagraph: thread.multiParagraph,
     located: thread.located,
+    anchorTextTruncated: isAnchorTextCut(thread),
     memos: thread.memos.map((memo) => ({ ...memo }))
   }
 }
